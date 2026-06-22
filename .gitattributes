@@ -1,0 +1,9 @@
+# Normalize all text files to LF in the repository (CubeMX emits CRLF on Windows).
+* text=auto eol=lf
+
+# Binary assets — never convert
+*.bin  binary
+*.hex  binary
+*.elf  binary
+*.png  binary
+*.ico  binary
