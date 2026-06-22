@@ -1,5 +1,5 @@
 /**
- * board.h — FK407M1-V1.1 (STM32F407VET6) board pin map.
+ * board.h - FK407M1-V1.1 (STM32F407VET6) board pin map.
  *
  * Single source of truth for board-specific pins. Confirmed from the FK407M1
  * hardware reference (stm32-base.org):
@@ -11,6 +11,7 @@
 #pragma once
 
 #include "main.h" /* CubeMX-generated: pulls in stm32f4xx_hal.h + any user-labelled pins */
+#include "gpio.hpp"
 
 /* If the CubeMX "LED" user label is set on PC13, main.h already defines these.
  * Fall back to the known board pin so this builds even without the label. */
@@ -21,7 +22,5 @@
 #define LED_Pin GPIO_PIN_13
 #endif
 
-/* Active-low LED helpers */
-#define LED_ON()     HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET)
-#define LED_OFF()    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET)
-#define LED_TOGGLE() HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin)
+/* Active-low user LED. */
+inline const gpio::OutputPin led{LED_GPIO_Port, LED_Pin, /*active_high=*/false};

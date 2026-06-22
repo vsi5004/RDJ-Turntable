@@ -7,7 +7,13 @@
       "Bash(git check-ignore *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "WebSearch",
+      "WebFetch(domain:www.magntek.com.cn)",
+      "PowerShell(pip install --user --quiet pymupdf 2>&1)",
+      "PowerShell(python -c \"import fitz; print\\('PyMuPDF', fitz.__doc__.split\\(chr\\(10\\)\\)[0] if fitz.__doc__ else 'ok'\\)\")",
+      "Read(//c/Users/isirc/AppData/Local/Temp/**)",
+      "Bash(git commit -q -m ' *)"
     ]
   }
 }

@@ -69,6 +69,8 @@ void Error_Handler(void);
 #define DISP_CS2_GPIO_Port GPIOE
 #define LED_Pin GPIO_PIN_13
 #define LED_GPIO_Port GPIOC
+#define MT_CS_Pin GPIO_PIN_4
+#define MT_CS_GPIO_Port GPIOA
 #define KEY0_Pin GPIO_PIN_8
 #define KEY0_GPIO_Port GPIOE
 #define KEY1_Pin GPIO_PIN_9

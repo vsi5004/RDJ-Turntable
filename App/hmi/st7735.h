@@ -1,20 +1,24 @@
 /**
- * st7735.h — minimal ST7735 driver over the shared SPI3 bus.
+ * st7735.h - minimal ST7735 driver over the shared SPI3 bus.
  *
  * The bus (SPI3 SCK/MOSI), DC, RST and backlight are shared across all panels;
- * each panel is selected by its own CS. A panel is described by st7735_t (its CS).
+ * each panel is selected by its own (active-low) CS, held by Panel.
  */
 #pragma once
-#include "main.h" /* HAL types + CubeMX GPIO label macros (DISP_*, KEYx) */
-#include <stdint.h>
+#include "main.h" /* HAL types + CubeMX GPIO label macros */
+#include "gpio.hpp"
+#include <cstdint>
 
-typedef struct {
-    GPIO_TypeDef *cs_port;
-    uint16_t      cs_pin;
-} st7735_t;
+namespace st7735 {
 
-void st7735_hw_reset(void);                  /* pulse the shared RST (resets all panels) */
-void st7735_backlight(uint8_t on);           /* shared backlight on/off */
-void st7735_init(const st7735_t *d);         /* run init sequence on one CS-selected panel */
-void st7735_fill(const st7735_t *d, uint16_t color);     /* solid fill (blocking) */
-void st7735_draw(const st7735_t *d, const uint16_t *fb); /* push 128x128 framebuffer via DMA */
+struct Panel {
+    gpio::OutputPin cs; /* active-low chip select */
+};
+
+void hw_reset();                               /* pulse shared RST (resets all panels) */
+void backlight(bool on);                       /* shared backlight on/off */
+void init_all(const Panel** panels, int count);/* init all panels, sharing stabilisation delays */
+void fill(const Panel& p, uint16_t color);     /* solid fill (blocking) */
+void draw(const Panel& p, const uint16_t* fb); /* push 128x128 framebuffer via DMA */
+
+}  // namespace st7735
