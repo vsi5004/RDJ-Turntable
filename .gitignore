@@ -1,0 +1,34 @@
+# Build output
+/build/
+/Build/
+/cmake-build-*/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.su
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+/.cache/            # clangd index
+
+# CubeMX
+*.bak
+~$*
+/RDJ-Turntable.ioc.bak
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Keep VS Code shared configs in-repo, ignore per-user state
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
