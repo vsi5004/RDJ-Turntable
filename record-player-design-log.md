@@ -145,7 +145,10 @@ connectivity, and a four-key screen-based HMI.
     mounting. The motor encoder's job is commutation only; platter speed comes from the separate platter ABI.
   - **TODO:** run the MT6826S self-calibration spin once and store the result (earns the ±0.07° / smooth commutation).
 - **Platter shaft:** 1000 PPR ABI quadrature + index — RPM feedback (period-between-edges + index reference).
-- **Tonearm motor:** high-res SPI magnetic encoder — commutation + carriage position.
+- **Tonearm motor — DECISION: AS5048A** (AMS magnetic absolute, **14-bit (16,384 steps/rev) via SPI**, max
+  **10 MHz**, **SPI mode 1**, 16-bit frames with even parity, pipelined read). Commutation + carriage position
+  (via the capstan ratio). A different part from the platter's MT6826S, so it lives on its **own SPI bus** —
+  see SPI allocation below.
 
 ### CAN
 - CAN 2.0B classic, single node. F407 bxCAN is on-chip; **add an external transceiver** (SN65HVD230 / TJA1051) —
@@ -165,10 +168,14 @@ connectivity, and a four-key screen-based HMI.
 
 | Bus | Devices | Notes |
 |-----|---------|-------|
-| **SPI1** | Drive-motor (MT6826S) + tonearm-motor magnetic encoders | Latency-critical, read every FOC loop, full-duplex (MISO needed) |
-| **SPI3** | 4× ScreenKey displays | DMA'd, best-effort, write-only (MOSI); shared MOSI/SCLK/DC/RST + per-screen CS |
-| **SPI2** | Spare | |
+| **SPI1** | Drive-motor **MT6826S** encoder | Latency-critical, read every FOC loop, full-duplex; APB2 → /8 ≈ 10.5 MHz (dev max ~16 MHz, mode 3) |
+| **SPI2** | Tonearm-motor **AS5048A** encoder | Own bus: AS5048A differs in SPI mode + max clock, so don't share SPI1; full-duplex; APB1 → /8 ≈ 5.25 MHz (dev max 10 MHz, mode 1) |
+| **SPI3** | ScreenKey displays | DMA'd, best-effort, write-only (MOSI); shared MOSI/SCLK/DC/RST + per-screen CS |
 | *(timer)* | Platter ABI quadrature | Hardware timer encoder mode (not SPI/PIO) |
+
+> **Why two encoder buses (updated):** the platter (MT6826S) and tonearm (AS5048A) encoders use **different SPI
+> modes and max clocks**. Sharing one bus would force per-transaction CPOL/CPHA + prescaler reconfiguration in
+> the FOC hot path. SPI2 was the spare, so each encoder gets its own correctly-configured bus.
 
 > **Rule:** keep displays **off** the encoder bus — display writes are bursty and can stall the bus for ms;
 > encoders need deterministic low-latency reads.
@@ -233,7 +240,7 @@ connectivity, and a four-key screen-based HMI.
 
 - Drive + tonearm motors: **2204 260 KV gimbal motors**
 - Motor drivers: **SimpleFOC Mini**
-- Motor encoders: **MT6826S** (MagnTek, 15-bit AMR absolute, SPI)
+- Motor encoders: **MT6826S** (MagnTek, 15-bit AMR absolute, SPI — *platter*, on SPI1) and **AS5048A** (AMS, 14-bit absolute, SPI — *tonearm*, on SPI2)
 - Platter encoder: **1000 PPR ABI quadrature + index**
 - Cartridge: **Ortofon 2M** (~20 µm/mN, ~7.2 g)
 - MCU: **STM32F407VET6** (alt: STM32H723ZGT6 for headroom)
