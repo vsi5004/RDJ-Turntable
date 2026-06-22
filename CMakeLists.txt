@@ -46,6 +46,9 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Application layer
     App/app.c
+    # HMI / displays
+    App/hmi/st7735.c
+    App/hmi/screens.c
     # SEGGER RTT (vendored)
     third_party/SEGGER_RTT/SEGGER_RTT.c
     third_party/SEGGER_RTT/SEGGER_RTT_printf.c
@@ -55,6 +58,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     App
     App/platform
+    App/hmi
     third_party/SEGGER_RTT
 )
 

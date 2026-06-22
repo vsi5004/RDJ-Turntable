@@ -1,29 +1,33 @@
 /**
- * app.c — Milestone 0: prove the toolchain/debug/clock chain.
+ * app.c — application top level.
  *
- * Verifies, end to end:
- *   - LED on PC13 blinks at ~2 Hz             -> GPIO + 168 MHz clock are alive
- *   - RTT prints boot SYSCLK + a tick counter -> trace path works, clock is correct
- *   - `tick` is a live-watchable variable      -> debugger connection works
+ * M1: bring up the ScreenKey displays. The main loop is non-blocking (tick-based
+ * LED heartbeat) so key polling stays responsive.
  */
 #include "app.h"
 #include "board.h"
 #include "trace.h"
-
-static volatile uint32_t tick; /* volatile: keep it live for the debugger Watch panel */
+#include "hmi/screens.h"
 
 void app_init(void)
 {
     trace_init();
     LED_OFF();
-    TRACE("\n=== RDJ-Turntable M0 ===\n");
+    TRACE("\n=== RDJ-Turntable M1 ===\n");
     TRACE("SYSCLK = %u Hz (expect 168000000)\n",
           (unsigned)HAL_RCC_GetSysClockFreq());
+    screens_init();
 }
 
 void app_run(void)
 {
-    LED_TOGGLE();
-    TRACE("tick %u\n", (unsigned)tick++);
-    HAL_Delay(250); /* ~2 Hz blink */
+    static uint32_t last_blink;
+    uint32_t now = HAL_GetTick();
+
+    if (now - last_blink >= 250) { /* ~2 Hz heartbeat */
+        last_blink = now;
+        LED_TOGGLE();
+    }
+
+    screens_tick(); /* poll keys every iteration */
 }
