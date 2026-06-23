@@ -1,0 +1,488 @@
+# Turntable state machine and ScreenKey behavior
+
+Status: **approved design baseline**. The system behavior, hardware boundaries, and initial
+three-ScreenKey interaction model are settled.
+
+## 1. Purpose
+
+The turntable controller coordinates the platter, tonearm carriage, tonearm lift, user interface,
+and eventually CAN commands. It does not perform motor commutation, render screens, or directly
+poll GPIO. Those responsibilities remain in their subsystem drivers.
+
+The design favors explicit, auditable workflow states over combinations of booleans. It must remain
+straightforward to extend without changing existing subsystem implementations or teaching the HMI
+about hardware details.
+
+## 2. Architectural boundaries
+
+```text
+ScreenKeys / CAN
+      |
+      v
+semantic Events
+      |
+      v
+TurntableController -----> immutable Snapshot -----> HMI / CAN status
+      |
+      +---- IPlatter
+      +---- ITonearmCarriage
+      +---- ITonearmLift
+      +---- IClock
+```
+
+- `TurntableController` owns the product-level state and is the only component allowed to initiate
+  product state transitions.
+- `IPlatter` owns platter drive modes, speed estimation, speed lock, and platter faults. The existing
+  `foc::Mode` remains private motor-control state rather than becoming product state.
+- `ITonearmCarriage` owns carriage motion, breakbeam homing, unwrapped position, software limits,
+  servo-follow, and carriage faults.
+- `ITonearmLift` owns raising and lowering the tonearm.
+- The initial lift implementation uses RC PWM. The linear servo is calibrated and homed outside the
+  turntable, so this system never homes it. Completion is estimated from configured travel time.
+- UI navigation is independent of operational state. Opening Settings never changes the physical
+  turntable state by itself.
+- Physical keys and CAN commands are translated into the same semantic events.
+
+Concrete subsystem objects may be statically allocated and passed to the controller by reference.
+The interfaces do not require dynamic allocation.
+
+## 3. Persistent and session data
+
+The controller owns or exposes the following strongly typed data independently of its workflow
+state:
+
+```cpp
+enum class RecordSpeed : uint8_t { Rpm33, Rpm45 };
+enum class HomeConfidence : uint8_t { Unknown, Valid };
+enum class PositionConfidence : uint8_t { Unknown, Estimated, Verified };
+```
+
+- `selected_speed`: defaults according to stored user settings and may be changed without creating
+  separate 33 and 45 RPM workflow states.
+- `home_confidence`: always `Unknown` at turntable power-up. It becomes `Valid` only after the
+  carriage breakbeam homing sequence succeeds.
+- `carriage_position`: zero is the outward breakbeam trip point; positive travel is inward toward
+  the record center. The parked position is a small positive offset so the beam is clear.
+- `active_fault`: a structured fault record containing code, source, recovery policy, timestamp,
+  and whether the fault invalidated carriage home.
+- `operation_id`: increments whenever a subsystem command is issued. Completion events carry the
+  corresponding ID so late events from cancelled operations cannot advance a newer workflow.
+
+The selected speed and user settings may be persistent. Carriage home validity is session-only and
+is never restored after turntable power-up.
+
+## 4. Product states
+
+The product state is intentionally explicit. Transient states name the physical operation being
+waited on, making traces and fault reports understandable without reconstructing hidden flags.
+
+| State | Meaning and invariant |
+|---|---|
+| `NeedsHome` | Carriage coordinates are not trusted. Platter is stopped and Play is unavailable. |
+| `RaisingForInitialization` | User requested initialization; raised PWM was commanded and its conservative settling interval is running. |
+| `HomingCarriage` | Carriage is moving outward slowly, looking for the breakbeam reference. |
+| `ParkingCarriage` | Reference was established and the carriage is moving inward to the beam-clear parked position. |
+| `Idle` | Home is valid, carriage is parked, tonearm is raised, and platter is stopped. |
+| `SpinningUpForPlay` | Platter is accelerating to the selected speed for a new side. |
+| `SeekingLeadIn` | Platter is locked; raised tonearm is moving to the fixed 12-inch lead-in position. |
+| `LoweringForPlay` | Tonearm lower PWM was commanded; settling interval is running. |
+| `Playing` | Platter is locked, tonearm is lowered, and carriage servo-follow is active. |
+| `RaisingForPause` | Tonearm raise PWM was commanded while platter and carriage position are retained. |
+| `Paused` | Tonearm is raised, platter continues at locked speed, and carriage holds its position. |
+| `LoweringForResume` | Tonearm is being lowered at its retained carriage position. |
+| `RaisingForSpeedChange` | Tonearm is being raised before a live speed change. |
+| `ChangingSpeedForPlayback` | Tonearm is raised; platter is acquiring the newly selected speed before playback resumes. |
+| `LoweringAfterSpeedChange` | New speed is locked and the tonearm is returning to the record. |
+| `ChangingSpeedWhilePaused` | Paused tonearm remains raised while the platter acquires the new speed. |
+| `RaisingForStop` | Tonearm is being raised before carriage return. |
+| `ReturningHomeWithPlatter` | Raised tonearm is returning outward while the platter remains running. |
+| `StoppingPlatter` | Carriage is parked and the platter is stopping. |
+| `Interrupted` | Recoverable fault was cleared; home and carriage position remain valid, tonearm is raised, and platter is stopped. |
+| `SpinningUpForResume` | Platter is acquiring speed before resuming from `Interrupted` at the retained position. |
+| `ReturningHomeWithoutPlatter` | Raised tonearm is returning from `Interrupted`; platter is already stopped. |
+| `Maintenance` | An exclusive, explicitly selected hardware procedure owns the relevant subsystems. |
+| `Fault` | A latched fault is displayed and safe-state commands have been issued. |
+
+### Nominal flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> NeedsHome
+    NeedsHome --> RaisingForInitialization: InitializeRequested
+    RaisingForInitialization --> HomingCarriage: LiftSettled(Raised)
+    HomingCarriage --> ParkingCarriage: HomeReferenceFound
+    ParkingCarriage --> Idle: CarriageAtPark
+
+    Idle --> SpinningUpForPlay: PlayRequested
+    SpinningUpForPlay --> SeekingLeadIn: PlatterSpeedLocked
+    SeekingLeadIn --> LoweringForPlay: CarriageAtLeadIn
+    LoweringForPlay --> Playing: LiftSettled(Lowered)
+
+    Playing --> RaisingForPause: PauseRequested
+    RaisingForPause --> Paused: LiftSettled(Raised)
+    Paused --> LoweringForResume: ResumeRequested
+    LoweringForResume --> Playing: LiftSettled(Lowered)
+
+    Playing --> RaisingForSpeedChange: SpeedChangeRequested
+    RaisingForSpeedChange --> ChangingSpeedForPlayback: LiftSettled(Raised)
+    ChangingSpeedForPlayback --> LoweringAfterSpeedChange: PlatterSpeedLocked
+    LoweringAfterSpeedChange --> Playing: LiftSettled(Lowered)
+
+    Playing --> RaisingForStop: StopRequested or EndOfSide
+    RaisingForStop --> ReturningHomeWithPlatter: LiftSettled(Raised)
+    ReturningHomeWithPlatter --> StoppingPlatter: CarriageAtPark
+    StoppingPlatter --> Idle: PlatterStopped
+
+    Interrupted --> SpinningUpForResume: ResumeRequested
+    SpinningUpForResume --> LoweringForResume: PlatterSpeedLocked
+    Interrupted --> ReturningHomeWithoutPlatter: StopRequested
+    ReturningHomeWithoutPlatter --> Idle: CarriageAtPark
+```
+
+## 5. Events
+
+### User and remote intents
+
+| Event | Payload | Notes |
+|---|---|---|
+| `InitializeRequested` | none | Valid only from `NeedsHome`. |
+| `CancelRequested` | none | Cancels initialization or a cancellable maintenance operation. |
+| `PlayRequested` | none | Starts a new side from `Idle`. |
+| `PauseRequested` | none | Raises the tonearm but keeps platter speed and carriage position. |
+| `ResumeRequested` | none | Resumes from `Paused` or `Interrupted`. |
+| `StopRequested` | none | Safely raises, returns, and stops from any active workflow. |
+| `SpeedChangeRequested` | `RecordSpeed` | Changes the selected target using state-appropriate behavior. |
+| `MaintenanceRequested` | `MaintenanceOperation` | Guarded according to operation requirements. |
+| `MaintenanceCancelRequested` | none | Honored only if the active operation declares itself cancellable. |
+| `AcknowledgeFaultRequested` | none | Recovery is allowed only after the underlying condition clears. |
+
+Settings navigation events are consumed by the HMI and are not product events unless they commit a
+setting or request a maintenance operation.
+
+### Subsystem completions and observations
+
+| Event | Payload |
+|---|---|
+| `LiftSettled` | target position, confidence, operation ID |
+| `HomeReferenceFound` | raw carriage position, operation ID |
+| `CarriageAtPark` | verified position, operation ID |
+| `CarriageAtLeadIn` | verified position, operation ID |
+| `PlatterSpeedLocked` | selected and measured speed, operation ID |
+| `PlatterStopped` | operation ID |
+| `PlatterSpeedLost` | measured speed/error |
+| `EndOfSideDetected` | carriage position and detection evidence |
+| `MaintenanceCompleted` | operation and result |
+| `FaultDetected` | `FaultRecord` |
+| `DeadlineExpired` | operation and operation ID |
+
+Subsystem status may be polled, but changes are converted into these events before the controller
+handles them. A fixed-capacity event queue prevents heap use and preserves event ordering.
+
+## 6. Transition table
+
+`SettingsOpened` is intentionally absent: Settings is an HMI view, not a physical state transition.
+Unlisted events are ignored and traced in debug builds.
+
+### Initialization and idle
+
+| Current state | Event | Guard | Action | Next state |
+|---|---|---|---|---|
+| `NeedsHome` | `InitializeRequested` | no blocking fault | command lift raised; start conservative settle interval | `RaisingForInitialization` |
+| `RaisingForInitialization` | `LiftSettled(Raised)` | matching operation ID | begin low-speed outward homing search | `HomingCarriage` |
+| `HomingCarriage` | `HomeReferenceFound` | breakbeam transition valid | stop; establish coordinate zero; command inward park offset | `ParkingCarriage` |
+| `ParkingCarriage` | `CarriageAtPark` | beam clear and position within tolerance | set home valid | `Idle` |
+| initialization state | `CancelRequested` | always | stop carriage; retain home unknown; command lift raised | `NeedsHome` |
+| homing/parking state | `DeadlineExpired` | matching operation ID | raise `CarriageHomeFailed`; invalidate home | `Fault` |
+| `Idle` | `PlayRequested` | home valid | start platter at selected speed | `SpinningUpForPlay` |
+| `Idle` or `NeedsHome` | `SpeedChangeRequested` | supported speed | store selected speed | unchanged |
+
+The homing search has both a maximum elapsed time and maximum commanded relative travel. Mechanical
+hard stops make a failed breakbeam safe at the configured low homing speed/voltage, but failure still
+latches a fault.
+
+### Starting and playback
+
+| Current state | Event | Guard | Action | Next state |
+|---|---|---|---|---|
+| `SpinningUpForPlay` | `PlatterSpeedLocked` | stable for configured lock window | command carriage to 12-inch lead-in | `SeekingLeadIn` |
+| `SpinningUpForPlay` | `DeadlineExpired` | matching operation ID | raise `PlatterLockTimeout` | `Fault` |
+| `SeekingLeadIn` | `CarriageAtLeadIn` | position within tolerance | command lift lowered | `LoweringForPlay` |
+| `SeekingLeadIn` | `DeadlineExpired` | matching operation ID | raise `CarriageSeekTimeout`; invalidate home if slip/stall suspected | `Fault` |
+| `LoweringForPlay` | `LiftSettled(Lowered)` | matching operation ID | enable carriage servo-follow | `Playing` |
+| `Playing` | `PauseRequested` | none | disable servo-follow; command lift raised | `RaisingForPause` |
+| `RaisingForPause` | `LiftSettled(Raised)` | matching operation ID | hold carriage position | `Paused` |
+| `Paused` | `ResumeRequested` | platter still locked | command lift lowered | `LoweringForResume` |
+| `LoweringForResume` | `LiftSettled(Lowered)` | matching operation ID | enable servo-follow | `Playing` |
+| `Playing` | `EndOfSideDetected` | detector confidence satisfied | disable servo-follow; command lift raised | `RaisingForStop` |
+| `Playing` | `PlatterSpeedLost` | outside configured tolerance/window | enter safe fault handling | `Fault` |
+
+### Speed selection
+
+| Current state | Event | Action | Next state |
+|---|---|---|---|
+| `Idle`, `NeedsHome`, or `Interrupted` | `SpeedChangeRequested` | store selected speed | unchanged |
+| `Playing` | `SpeedChangeRequested` | store selected speed; disable servo-follow; command lift raised | `RaisingForSpeedChange` |
+| `RaisingForSpeedChange` | `LiftSettled(Raised)` | command new platter target | `ChangingSpeedForPlayback` |
+| `ChangingSpeedForPlayback` | `PlatterSpeedLocked` | command lift lowered | `LoweringAfterSpeedChange` |
+| `LoweringAfterSpeedChange` | `LiftSettled(Lowered)` | enable servo-follow | `Playing` |
+| `Paused` | `SpeedChangeRequested` | store selected speed; command new platter target | `ChangingSpeedWhilePaused` |
+| `ChangingSpeedWhilePaused` | `PlatterSpeedLocked` | keep lift raised and carriage held | `Paused` |
+| any speed-acquisition state | `DeadlineExpired` | raise `PlatterLockTimeout` | `Fault` |
+
+Speed selection is disabled during initialization, lead-in seek, lowering/raising transitions,
+return-home, platter stopping, maintenance, and uncleared faults. This prevents partially completed
+workflows from being silently retargeted.
+
+### Stop and cancellation
+
+| Current state | `StopRequested` action | Next state |
+|---|---|---|
+| `SpinningUpForPlay` | request platter stop | `StoppingPlatter` |
+| `SeekingLeadIn` | stop carriage; command return while lift is already raised | `ReturningHomeWithPlatter` |
+| `LoweringForPlay`, `Playing`, `LoweringForResume`, or `LoweringAfterSpeedChange` | disable servo-follow; command lift raised | `RaisingForStop` |
+| `RaisingForPause` or `RaisingForSpeedChange` | retain the in-progress raise but change its completion intent to stop | `RaisingForStop` |
+| `Paused`, `SpinningUpForResume`, `ChangingSpeedWhilePaused`, or `ChangingSpeedForPlayback` | command carriage return with lift raised | `ReturningHomeWithPlatter` |
+| `RaisingForStop` | no duplicate command | unchanged |
+| `ReturningHomeWithPlatter` or `StoppingPlatter` | no duplicate command | unchanged |
+| `Interrupted` | command carriage return; platter is already stopped | `ReturningHomeWithoutPlatter` |
+| `Idle` or `NeedsHome` | no action | unchanged |
+
+| Current state | Event | Action | Next state |
+|---|---|---|---|
+| `RaisingForStop` | `LiftSettled(Raised)` | command carriage park | `ReturningHomeWithPlatter` |
+| `ReturningHomeWithPlatter` | `CarriageAtPark` | command platter stop | `StoppingPlatter` |
+| `StoppingPlatter` | `PlatterStopped` | none | `Idle` if home valid, otherwise `NeedsHome` |
+| `ReturningHomeWithoutPlatter` | `CarriageAtPark` | none | `Idle` |
+| either return state | `DeadlineExpired` | raise `CarriageReturnTimeout`; invalidate home if position is uncertain | `Fault` |
+
+### Interrupted recovery
+
+`Interrupted` is used only when a fault stopped playback but carriage coordinates and the retained
+record position are still trusted.
+
+| Current state | Event | Action | Next state |
+|---|---|---|---|
+| `Interrupted` | `ResumeRequested` | start platter at selected speed | `SpinningUpForResume` |
+| `SpinningUpForResume` | `PlatterSpeedLocked` | command lift lowered at retained position | `LoweringForResume` |
+| `Interrupted` | `StopRequested` | return carriage with platter already stopped | `ReturningHomeWithoutPlatter` |
+
+### Maintenance transitions
+
+| Current state | Event | Guard | Action | Next state |
+|---|---|---|---|---|
+| `Idle` or `NeedsHome` | `MaintenanceRequested` | operation prerequisites satisfied | claim affected subsystems; start operation | `Maintenance` |
+| `Maintenance` | `MaintenanceCompleted` | matching operation ID | release subsystems; update calibration/home validity | `Idle` if home valid, otherwise `NeedsHome` |
+| `Maintenance` | `MaintenanceCancelRequested` | operation is cancellable | place affected subsystems in their safe states | `Idle` if home valid, otherwise `NeedsHome` |
+| `Maintenance` | `DeadlineExpired` or `FaultDetected` | matching operation/source | stop affected hardware and latch result | `Fault` |
+
+### Global fault transitions
+
+`FaultDetected` preempts every non-fault state. The controller performs the fault entry actions in
+Section 8 and enters `Fault`; subsystem completion events cannot leave it.
+
+| Current state | Event | Guard | Action | Next state |
+|---|---|---|---|---|
+| any non-fault state | `FaultDetected` | promoted subsystem/product fault | perform safe-state actions; latch root fault | `Fault` |
+| `Fault` | `AcknowledgeFaultRequested` | condition cleared, lift raise interval complete, home invalid | clear latch | `NeedsHome` |
+| `Fault` | `AcknowledgeFaultRequested` | condition cleared, lift raise interval complete, home valid and carriage parked | clear latch | `Idle` |
+| `Fault` | `AcknowledgeFaultRequested` | condition cleared, lift raise interval complete, home valid and carriage retained away from park | clear latch | `Interrupted` |
+| `Fault` | `AcknowledgeFaultRequested` | condition active or power cycle required | no action; explain unmet guard in snapshot | unchanged |
+
+## 7. Tonearm lift timing contract
+
+The initial `PwmTonearmLift` does not claim to measure physical position. It reports an estimated
+settled event after a conservative calculation:
+
+```text
+settle duration = commanded travel / configured servo speed
+                + acceleration allowance
+                + mechanical settling allowance
+                + safety margin
+```
+
+Raised and lowered pulse widths, usable travel, speed, and margins are configuration values. A new
+command cancels the previous timer and increments the operation ID. The PWM signal remains active so
+the servo's tested signal-loss behavior is not invoked during normal operation.
+
+Because the servo is pre-calibrated and pre-homed, the turntable contains no lift homing state. PWM
+mode cannot electronically detect a jam, incorrect linkage, or servo-local fault; `LiftSettled`
+therefore carries `PositionConfidence::Estimated`. A future feedback implementation can report
+`Verified` through the same interface without changing product transitions.
+
+The linkage should make the servo's zero/hard-stop correspond to tonearm fully raised. Lowering then
+moves toward a positive configured position, making the actuator's reference direction inherently
+safe.
+
+## 8. Fault model and recovery
+
+Faults are structured rather than represented by a single boolean:
+
+```cpp
+enum class RecoveryPolicy : uint8_t {
+    Retryable,
+    RequiresCarriageHome,
+    RequiresPowerCycle,
+};
+
+struct FaultRecord {
+    FaultCode code;
+    FaultSource source;
+    RecoveryPolicy recovery;
+    bool invalidates_home;
+    uint32_t occurred_at_ms;
+};
+```
+
+### Fault entry actions
+
+On entry to `Fault`, the controller:
+
+1. Latches the first/root fault and separately counts subsequent faults.
+2. Immediately disables platter drive.
+3. Disables carriage servo-follow and stops carriage motion.
+4. Commands the tonearm raised using PWM.
+5. Invalidates carriage home only when the fault makes position uncertain.
+6. Publishes the fault and available recovery action in the snapshot.
+
+Fault acknowledgement is ignored while the underlying condition remains active. Recovery also waits
+for the conservative tonearm-raise interval so the controller does not advertise a safe state too
+early.
+
+### Recovery destination
+
+| Condition after acknowledgement | Destination |
+|---|---|
+| Home invalidated or never established | `NeedsHome` |
+| Home valid and carriage is parked | `Idle` |
+| Home valid and carriage position is retained away from park | `Interrupted` |
+| Fault explicitly requires a power cycle | remain `Fault` |
+
+Typical platter driver, platter encoder, and speed-lock faults preserve carriage home. Sustained
+tonearm encoder loss during motion, carriage stall/slip, unexpected breakbeam behavior, or a software
+limit violation invalidate it. Brief communication/data errors may be filtered inside a subsystem;
+only a promoted fault reaches the product controller.
+
+## 9. Maintenance
+
+`Maintenance` represents an exclusive hardware operation, not browsing the Settings screens.
+`MaintenanceOperation` is extensible and initially includes:
+
+- platter motor electrical alignment;
+- MT6826S user calibration;
+- carriage re-home;
+- platter speed-loop tuning/diagnostic runs.
+
+Each operation declares prerequisites, affected subsystems, whether it is cancellable, and whether it
+invalidates carriage home. Dangerous operations are unavailable during playback. Existing blocking
+alignment/calibration routines must become incremental operations before they are integrated into the
+controller; the product main loop must never use multi-second `HAL_Delay()` calls.
+
+Read-only diagnostics do not require `Maintenance` and may remain visible during playback.
+
+## 10. Snapshot contract
+
+The HMI and CAN layer receive a read-only snapshot rather than inspecting controller internals:
+
+```cpp
+struct Snapshot {
+    State state;
+    RecordSpeed selected_speed;
+    Rpm measured_speed;
+    bool speed_locked;
+    HomeConfidence home;
+    CarriagePosition carriage;
+    LiftStatus lift;
+    FaultSummary fault;
+    AvailableActions actions;
+};
+```
+
+`AvailableActions` is calculated by the controller or a domain presenter. The HMI renders it; it does
+not duplicate transition guards. This ensures ScreenKeys and CAN expose the same legal actions.
+
+## 11. Three-ScreenKey behavior
+
+The normal view keeps stable physical roles:
+
+| Key | Role | Live information |
+|---|---|---|
+| Key 0 | Transport / initialization | primary action, workflow progress, hold-to-stop affordance |
+| Key 1 | RPM selection | selected RPM, measured RPM, lock/acquisition state |
+| Key 2 | Settings | settings entry, warning/fault badge, maintenance availability |
+
+### Key 0: transport
+
+The transport key uses contextual tap actions and a hold gesture for Stop:
+
+| Product state | Label/action |
+|---|---|
+| `NeedsHome` | **INIT**; tap emits `InitializeRequested` |
+| initialization states | **CANCEL**; tap emits `CancelRequested` |
+| `Idle` | **PLAY**; tap emits `PlayRequested` |
+| play-start states | **STOP**; tap emits `StopRequested` |
+| `Playing` | **PAUSE** on tap; a visible hold gesture emits `StopRequested` |
+| `RaisingForPause` | progress; hold/tap Stop changes the pending intent to stop |
+| `Paused` | **RESUME** on tap; hold emits `StopRequested` |
+| speed-change states | progress; Stop remains available |
+| stop/return states | **STOPPING** with progress; input disabled to prevent duplicates |
+| `Interrupted` | **RESUME** on tap; hold emits `StopRequested`/Home |
+| `Maintenance` | **CANCEL** only when the operation is cancellable |
+| retryable `Fault` | **ACK/RETRY** only after the underlying condition clears |
+| home-invalidating `Fault` | **ACK**, after which the button becomes **INIT** in `NeedsHome` |
+
+The hold threshold must be configured once and shown with a filling ring/progress treatment so Stop
+is discoverable rather than a hidden gesture.
+
+### Key 1: RPM
+
+- In `NeedsHome`, `Idle`, and `Interrupted`, a tap toggles 33 1/3 and 45 RPM immediately.
+- In `Playing`, a tap starts the raise/change-lock/lower sequence.
+- In `Paused`, a tap changes speed while keeping the tonearm raised.
+- During speed acquisition it shows selected RPM, measured RPM, and lock progress.
+- During states where retargeting is unsafe, the key remains informative but is visibly disabled.
+- Measured RPM is never replaced by the requested value; both are visually distinguishable.
+
+### Key 2: Settings
+
+- Settings can be opened during any non-fault workflow without changing product state.
+- Read-only diagnostics and safe preferences remain available during playback.
+- Maintenance items remain visible but disabled with a clear **STOP FIRST** reason when prerequisites
+  are not met.
+- Fault state changes this key to **DETAILS** so the user can inspect the root fault and recovery
+  requirement.
+
+### Proposed three-key Settings navigation
+
+Three keys are workable for a shallow settings carousel:
+
+| View | Key 0 | Key 1 | Key 2 |
+|---|---|---|---|
+| Browse | Back | Select current item | Next item |
+| Edit enum/value | Cancel | Save | Change/cycle value |
+| Confirmation | Cancel | Confirm | Details |
+
+This temporarily repurposes the transport key. A long hold on Key 0 remains a global Stop gesture
+while Settings is open. If Settings grows beyond a shallow carousel, or if permanent one-press
+transport access is required, a fourth ScreenKey is preferable to adding more hidden gestures.
+
+## 12. C++ implementation rules
+
+- Use `enum class` and small value types; do not encode workflow state with public booleans.
+- Keep controller data private. All state changes pass through one `transition_to()` function.
+- Centralize entry actions and deadlines so commands cannot be duplicated across event handlers.
+- Make `switch` statements exhaustive and enable compiler warnings for missing enum cases.
+- Use wrap-safe unsigned timestamp subtraction and never block the main loop.
+- Use a fixed-capacity event queue and no dynamic allocation in steady-state firmware.
+- Keep hardware HAL calls inside concrete subsystem adapters, not in the domain controller.
+- Inject subsystem interfaces and a clock so transition tests run on a host without STM32 hardware.
+- Test every legal transition, ignored event, cancellation, stale operation ID, deadline, and fault
+  recovery destination.
+- Trace transitions as `old state -> event -> new state` with operation and fault IDs.
+
+## 13. Settled HMI interaction decisions
+
+- Key 0 uses **tap for Play/Pause/Resume** and **hold for Stop** while playing or paused.
+- Settings temporarily repurposes all three keys for contextual navigation.
+- Long-hold Key 0 remains a global Stop override while Settings is open.
+- The exact hold duration is a configurable HMI parameter to tune during implementation; the display
+  must make hold progress visible.

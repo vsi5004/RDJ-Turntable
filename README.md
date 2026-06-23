@@ -82,3 +82,6 @@ The seam between generated and hand-written code: CubeMX's `main.c` calls `app_i
 - M3 — platter speed loop · M4 — tonearm + cueing · M5 — CAN + HMI integration · M6 — tonearm servo-follow
 
 See [docs/](docs/) for the CubeMX configuration applied at each milestone.
+
+The approved full-system operational model and three-ScreenKey behavior are specified in
+[docs/turntable-state-machine.md](docs/turntable-state-machine.md).
