@@ -705,3 +705,12 @@ enable low, does not start FOC PWM, does not load or run actuator diagnostics, a
 deterministic synthetic application snapshot. Short timers demonstrate initialization, playback,
 pause/resume, speed change, Stop, settings, diagnostic shortcuts, and fault views. Demo-only Key 2
 holds inject product or diagnostic faults so their presentation and recovery paths can be inspected.
+
+### Minimal rendering and antialiasing
+
+The ScreenKey renderer uses a hybrid asset pipeline rather than storing complete screen images.
+Icons, uppercase glyph atlases, and a segmented hold ring are rendered offline at 4× resolution,
+downsampled, quantized to packed 4-bit alpha, and committed as generated C++. Runtime code tints and
+integer-blends these reusable masks into the existing RGB565 framebuffer before DMA transfer. This
+keeps dynamic state, measured values, and accent colors composable without the flash cost of a full
+bitmap per screen state. Tiny text is pixel-aligned; large type, icons, and curves are antialiased.

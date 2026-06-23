@@ -105,6 +105,24 @@ Initialization, platter acquisition, tonearm movement, stopping, and diagnostic 
 short synthetic timers. No motor, carriage, or lift command is issued. For first bench testing, keep
 actuator power disconnected as an independent physical precaution.
 
+### HMI asset generation
+
+The minimalist interface uses generated 4-bit alpha masks for antialiased icons, three font sizes,
+and the segmented hold-progress ring. Python/Pillow runs only inside a pinned Docker generator;
+normal firmware builds consume the committed generated C++ directly.
+
+```powershell
+docker build -t rdj-hmi-assets -f tools/hmi-assets.Dockerfile .
+docker run --rm --mount type=bind,source="${PWD}",target=/src rdj-hmi-assets
+docker run --rm --mount type=bind,source="${PWD}",target=/src rdj-hmi-assets --check
+```
+
+The generator supersamples at 4×, downsamples into target-resolution coverage, and writes
+`App/hmi/generated/hmi_assets.cpp` plus the pixel-scaled comparison sheet
+[docs/hmi-minimal-preview.png](docs/hmi-minimal-preview.png). Small labels remain deliberately crisp,
+while icons, large values, and curved progress elements use alpha blending into the RGB565
+framebuffer.
+
 ## Flash & debug
 
 In VS Code, press **F5** (the `Debug (J-Link)` launch config): it builds, flashes over SWD,

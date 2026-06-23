@@ -42,6 +42,14 @@ public:
 
     bool pressed() const { return stable_state_; }
 
+    uint8_t hold_progress(uint32_t now_ms, uint32_t hold_ms, uint8_t segments = 32) const
+    {
+        if (!stable_state_ || hold_ms == 0 || segments == 0) return 0;
+        const uint32_t elapsed = static_cast<uint32_t>(now_ms - pressed_ms_);
+        if (elapsed >= hold_ms) return segments;
+        return static_cast<uint8_t>((elapsed * segments) / hold_ms);
+    }
+
 private:
     InputPin pin_;
     uint32_t debounce_ms_ = 20;

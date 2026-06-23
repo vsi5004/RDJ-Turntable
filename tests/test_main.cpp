@@ -470,6 +470,11 @@ void test_screenkey_transport_and_global_stop()
 
     intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
     CHECK(intent.event.type == turntable::EventType::PauseRequested);
+
+    const hmi::View playing = hmi::present(snapshot, {}, 17);
+    CHECK(playing.keys[0].icon == hmi::IconId::Pause);
+    CHECK(playing.keys[0].hold_available);
+    CHECK(playing.keys[0].hold_progress == 17);
 }
 
 void test_screenkey_fault_details_and_status_views()
@@ -484,6 +489,7 @@ void test_screenkey_fault_details_and_status_views()
     CHECK(interaction.snapshot().mode == hmi::Mode::FaultDetails);
     hmi::View view = hmi::present(snapshot, interaction.snapshot());
     CHECK_TEXT(view.keys[1].action, "CARRIAGE");
+    CHECK(view.keys[1].icon == hmi::IconId::Warning);
     CHECK_TEXT(view.keys[1].detail, "STALL");
     CHECK_TEXT(view.keys[2].action, "REHOME");
     CHECK_TEXT(view.keys[2].detail, "HOME LOST");

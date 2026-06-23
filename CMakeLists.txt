@@ -66,6 +66,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/hmi/presenter.cpp
     App/hmi/interaction_controller.cpp
     App/hmi/screenkey_demo.cpp
+    App/hmi/generated/hmi_assets.cpp
     # Control / encoders
     App/control/mt6826s.cpp
     App/control/as5048a.cpp

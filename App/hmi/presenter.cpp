@@ -24,13 +24,36 @@ void copy_text(char (&destination)[Size], const char* source)
 }
 
 void set_key(KeyView& key, const char* header, const char* action, const char* detail,
-             uint16_t accent, bool enabled = true)
+             uint16_t accent, bool enabled = true, IconId icon = IconId::None,
+             bool hold_available = false)
 {
     copy_text(key.header, header);
     copy_text(key.action, action);
     copy_text(key.detail, detail);
     key.accent = accent;
+    key.icon = icon;
     key.enabled = enabled;
+    key.hold_available = hold_available;
+}
+
+IconId transport_icon(turntable::State state)
+{
+    using turntable::State;
+    switch (state) {
+    case State::NeedsHome:
+    case State::RaisingForInitialization:
+    case State::HomingCarriage:
+    case State::ParkingCarriage: return IconId::Home;
+    case State::Idle:
+    case State::Paused:
+    case State::Interrupted:
+    case State::LoweringForResume:
+    case State::SpinningUpForResume: return IconId::Play;
+    case State::Playing: return IconId::Pause;
+    case State::Fault: return IconId::Warning;
+    case State::Maintenance: return IconId::Settings;
+    default: return IconId::Stop;
+    }
 }
 
 const char* transport_action(turntable::State state, const turntable::ActionSet& actions)
@@ -161,9 +184,10 @@ void measured_rpm(char (&text)[20], float rpm)
 View entering_diagnostic_view()
 {
     View view;
-    set_key(view.keys[0], "DIAGNOSTICS", "CANCEL", "SAFE ENTRY", kRed);
-    set_key(view.keys[1], "TONEARM", "RAISING", "PLEASE WAIT", kAmber, false);
-    set_key(view.keys[2], "CONTROL", "ENTERING", "PLEASE WAIT", kCyan, false);
+    set_key(view.keys[0], "DIAGNOSTICS", "CANCEL", "SAFE ENTRY", kRed, true, IconId::Back);
+    set_key(view.keys[1], "TONEARM", "RAISING", "PLEASE WAIT", kAmber, false, IconId::Home);
+    set_key(view.keys[2], "CONTROL", "ENTERING", "PLEASE WAIT", kCyan, false,
+            IconId::Settings);
     return view;
 }
 
@@ -178,7 +202,8 @@ View normal_view(const turntable::ApplicationSnapshot& snapshot)
             transport_detail(state.state), kRed,
             state.state != turntable::State::StoppingPlatter
                 && state.state != turntable::State::ReturningHomeWithPlatter
-                && state.state != turntable::State::ReturningHomeWithoutPlatter);
+                && state.state != turntable::State::ReturningHomeWithoutPlatter,
+            transport_icon(state.state), state.actions.contains(turntable::Action::Stop));
 
     char rpm[20];
     measured_rpm(rpm, state.measured_rpm);
@@ -187,7 +212,8 @@ View normal_view(const turntable::ApplicationSnapshot& snapshot)
             rpm, kAmber, state.actions.contains(turntable::Action::SelectSpeed));
     set_key(view.keys[2], "SYSTEM",
             state.state == turntable::State::Fault ? "DETAILS" : "SETTINGS",
-            state.home == turntable::HomeConfidence::Valid ? "HOME OK" : "NO HOME", kCyan);
+            state.home == turntable::HomeConfidence::Valid ? "HOME OK" : "NO HOME", kCyan,
+            true, state.state == turntable::State::Fault ? IconId::Warning : IconId::Settings);
     return view;
 }
 
@@ -204,24 +230,30 @@ const char* settings_item_name(SettingsItem item)
 View settings_view(const turntable::ApplicationSnapshot& snapshot, SettingsItem item)
 {
     View view;
-    set_key(view.keys[0], "SETTINGS", "BACK", "HOLD STOP", kRed);
+    set_key(view.keys[0], "SETTINGS", "BACK", "HOLD STOP", kRed, true, IconId::Back,
+            snapshot.turntable.actions.contains(turntable::Action::Stop));
     const bool diagnostics_enabled =
         snapshot.turntable.actions.contains(turntable::Action::EnterDiagnostics);
     const bool enabled = item != SettingsItem::Diagnostics || diagnostics_enabled;
     const char* detail = "SELECT";
     if (item == SettingsItem::Diagnostics && !diagnostics_enabled) detail = "STOP FIRST";
     if (item == SettingsItem::Brightness) detail = "HW PENDING";
-    set_key(view.keys[1], "SELECT", settings_item_name(item), detail, kAmber, enabled);
-    set_key(view.keys[2], "BROWSE", "NEXT", "TAP", kCyan);
+    IconId item_icon = IconId::Home;
+    if (item == SettingsItem::Diagnostics) item_icon = IconId::Settings;
+    if (item == SettingsItem::Brightness) item_icon = IconId::Confirm;
+    set_key(view.keys[1], "SELECT", settings_item_name(item), detail, kAmber, enabled, item_icon);
+    set_key(view.keys[2], "BROWSE", "NEXT", "TAP", kCyan, true, IconId::Next);
     return view;
 }
 
 View status_view(const turntable::Snapshot& state)
 {
     View view;
-    set_key(view.keys[0], "STATUS", "BACK", "HOLD STOP", kRed);
+    set_key(view.keys[0], "STATUS", "BACK", "HOLD STOP", kRed, true, IconId::Back,
+            state.actions.contains(turntable::Action::Stop));
     set_key(view.keys[1], "SYSTEM", status_group(state.state),
-            state.home == turntable::HomeConfidence::Valid ? "HOME OK" : "NO HOME", kAmber);
+            state.home == turntable::HomeConfidence::Valid ? "HOME OK" : "NO HOME", kAmber,
+            true, IconId::Home);
     char rpm[20];
     measured_rpm(rpm, state.measured_rpm);
     set_key(view.keys[2], "PLATTER",
@@ -233,30 +265,34 @@ View status_view(const turntable::Snapshot& state)
 View diagnostic_confirmation_view(bool enabled)
 {
     View view;
-    set_key(view.keys[0], "DIAGNOSTICS", "CANCEL", "BACK", kRed);
+    set_key(view.keys[0], "DIAGNOSTICS", "CANCEL", "BACK", kRed, true, IconId::Back);
     set_key(view.keys[1], "CONFIRM", enabled ? "ENTER" : "BLOCKED",
-            enabled ? "ARM RAISES" : "STOP FIRST", kAmber, enabled);
-    set_key(view.keys[2], "SAFETY", "LIMITS ON", "HOLD STOP", kCyan);
+            enabled ? "ARM RAISES" : "STOP FIRST", kAmber, enabled, IconId::Confirm);
+    set_key(view.keys[2], "SAFETY", "LIMITS ON", "HOLD STOP", kCyan, true,
+            IconId::Warning);
     return view;
 }
 
 View brightness_view()
 {
     View view;
-    set_key(view.keys[0], "BRIGHTNESS", "BACK", "SETTINGS", kRed);
-    set_key(view.keys[1], "DISPLAY", "FIXED", "FULL LEVEL", kAmber, false);
-    set_key(view.keys[2], "CONTROL", "NO PWM", "HW PENDING", kCyan, false);
+    set_key(view.keys[0], "BRIGHTNESS", "BACK", "SETTINGS", kRed, true, IconId::Back);
+    set_key(view.keys[1], "DISPLAY", "FIXED", "FULL LEVEL", kAmber, false,
+            IconId::Settings);
+    set_key(view.keys[2], "CONTROL", "NO PWM", "HW PENDING", kCyan, false,
+            IconId::Warning);
     return view;
 }
 
 View fault_details_view(const turntable::Snapshot& state)
 {
     View view;
-    set_key(view.keys[0], "FAULT", "BACK", "SAFE OUTPUTS", kRed);
+    set_key(view.keys[0], "FAULT", "BACK", "SAFE OUTPUTS", kRed, true, IconId::Back);
     set_key(view.keys[1], "SOURCE", fault_source(state.fault.source), fault_code(state.fault.code),
-            kAmber);
+            kAmber, true, IconId::Warning);
     set_key(view.keys[2], "RECOVERY", recovery_name(state.fault.recovery),
-            state.fault.invalidates_home ? "HOME LOST" : "HOME KEPT", kCyan);
+            state.fault.invalidates_home ? "HOME LOST" : "HOME KEPT", kCyan, true,
+            IconId::Home);
     return view;
 }
 
@@ -265,16 +301,22 @@ View diagnostic_view(const turntable::ApplicationSnapshot& snapshot)
     const diagnostics::Snapshot& state = snapshot.diagnostic;
     View view;
     if (state.state == diagnostics::State::Fault) {
-        set_key(view.keys[0], "DIAGNOSTIC", "ACK", "HOLD EXIT", kRed);
-        set_key(view.keys[1], "COMMAND", "FAULT", "OUTPUTS SAFE", kAmber, false);
-        set_key(view.keys[2], "CONTROL", "FAULT", "OUTPUTS SAFE", kCyan, false);
+        set_key(view.keys[0], "DIAGNOSTIC", "ACK", "HOLD EXIT", kRed, true,
+                IconId::Warning, true);
+        set_key(view.keys[1], "COMMAND", "FAULT", "OUTPUTS SAFE", kAmber, false,
+                IconId::Warning);
+        set_key(view.keys[2], "CONTROL", "FAULT", "OUTPUTS SAFE", kCyan, false,
+                IconId::Warning);
         return view;
     }
     if (state.state == diagnostics::State::Stopping
         || snapshot.state == turntable::ApplicationState::ExitingDiagnostic) {
-        set_key(view.keys[0], "DIAGNOSTIC", "STOPPING", "PLEASE WAIT", kRed, false);
-        set_key(view.keys[1], "COMMAND", "STOPPING", "PLEASE WAIT", kAmber, false);
-        set_key(view.keys[2], "CONTROL", "STOPPING", "PLEASE WAIT", kCyan, false);
+        set_key(view.keys[0], "DIAGNOSTIC", "STOPPING", "PLEASE WAIT", kRed, false,
+                IconId::Stop);
+        set_key(view.keys[1], "COMMAND", "STOPPING", "PLEASE WAIT", kAmber, false,
+                IconId::Stop);
+        set_key(view.keys[2], "CONTROL", "STOPPING", "PLEASE WAIT", kCyan, false,
+                IconId::Stop);
         return view;
     }
 
@@ -283,37 +325,47 @@ View diagnostic_view(const turntable::ApplicationSnapshot& snapshot)
     set_key(view.keys[0], "PLATTER",
             running && active == diagnostics::Action::OpenLoopSpin ? "STOP" : "SPIN",
             running ? "HOLD STOP" : "HOLD EXIT", kRed,
-            !running || active == diagnostics::Action::OpenLoopSpin);
+            !running || active == diagnostics::Action::OpenLoopSpin,
+            running ? IconId::Stop : IconId::Play, true);
     set_key(view.keys[1], "ENCODER",
             running && active == diagnostics::Action::EncoderAutoCal ? "CAL RUN" : "ALIGN",
             "HOLD CAL", kAmber,
             !running || active == diagnostics::Action::ElectricalAlign
-                || active == diagnostics::Action::EncoderAutoCal);
+                || active == diagnostics::Action::EncoderAutoCal,
+            IconId::Settings);
     set_key(view.keys[2], "CONTROL",
             running && active == diagnostics::Action::ClosedLoopVelocity ? "STOP" : "LOOP",
             running ? "RUNNING" : "READY", kCyan,
-            !running || active == diagnostics::Action::ClosedLoopVelocity);
+            !running || active == diagnostics::Action::ClosedLoopVelocity,
+            running ? IconId::Stop : IconId::Play);
     return view;
 }
 
 }  // namespace
 
-View present(const turntable::ApplicationSnapshot& snapshot, NavigationSnapshot navigation)
+View present(const turntable::ApplicationSnapshot& snapshot, NavigationSnapshot navigation,
+             uint8_t transport_hold_progress)
 {
-    if (snapshot.authority == turntable::ControlAuthority::Diagnostic)
-        return diagnostic_view(snapshot);
+    View view;
+    if (snapshot.authority == turntable::ControlAuthority::Diagnostic) {
+        view = diagnostic_view(snapshot);
+        view.keys[0].hold_progress = view.keys[0].hold_available ? transport_hold_progress : 0;
+        return view;
+    }
 
     switch (navigation.mode) {
-    case Mode::Primary: return normal_view(snapshot);
-    case Mode::SettingsBrowse: return settings_view(snapshot, navigation.settings_item);
-    case Mode::SystemStatus: return status_view(snapshot.turntable);
+    case Mode::Primary: view = normal_view(snapshot); break;
+    case Mode::SettingsBrowse: view = settings_view(snapshot, navigation.settings_item); break;
+    case Mode::SystemStatus: view = status_view(snapshot.turntable); break;
     case Mode::DiagnosticConfirmation:
-        return diagnostic_confirmation_view(
+        view = diagnostic_confirmation_view(
             snapshot.turntable.actions.contains(turntable::Action::EnterDiagnostics));
-    case Mode::Brightness: return brightness_view();
-    case Mode::FaultDetails: return fault_details_view(snapshot.turntable);
+        break;
+    case Mode::Brightness: view = brightness_view(); break;
+    case Mode::FaultDetails: view = fault_details_view(snapshot.turntable); break;
     }
-    return normal_view(snapshot);
+    view.keys[0].hold_progress = view.keys[0].hold_available ? transport_hold_progress : 0;
+    return view;
 }
 
 }  // namespace hmi

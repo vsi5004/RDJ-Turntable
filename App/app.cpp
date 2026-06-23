@@ -204,12 +204,14 @@ void app_run(void)
     handle_demo_keys(now);
     screenkey_demo.tick(now);
     screens::show(hmi::present(screenkey_demo.application_snapshot(),
-                               screenkey_demo.navigation_snapshot()));
+                               screenkey_demo.navigation_snapshot(),
+                               key0.hold_progress(now, kGlobalStopHoldMs)));
 #else
     handle_keys(now);
     application.tick();
     key_interaction.synchronize(application.snapshot());
-    screens::show(hmi::present(application.snapshot(), key_interaction.snapshot()));
+    screens::show(hmi::present(application.snapshot(), key_interaction.snapshot(),
+                               key0.hold_progress(now, kGlobalStopHoldMs)));
 #endif
 
     if (static_cast<uint32_t>(now - last_blink) >= 250) {
