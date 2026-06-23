@@ -15,7 +15,19 @@
       "Read(//c/Users/isirc/AppData/Local/Temp/**)",
       "Bash(git commit -q -m ' *)",
       "Read(//c/Users/isirc/.claude/projects/c--dev-RDJ-Turntable/memory/**)",
-      "Bash(cmake --build --preset Debug)"
+      "Bash(cmake --build --preset Debug)",
+      "Bash(git push *)",
+      "Bash(find /c/Users/isirc -iname \"*MT6826*.pdf\" 2>/dev/null | head; find /c/dev -iname \"*.pdf\" 2>/dev/null | head; ls ~/Downloads/*MT* 2>/dev/null)",
+      "Read(//c/Users/isirc/**)",
+      "Read(//c/dev/**)",
+      "Read(//c/Users/isirc/Downloads/**)",
+      "Bash(curl -sL -o docs/datasheets/MT6826S_Rev1.1.pdf \"https://www.magntek.com.cn/upload/pdf/202407/MT6826S_Datasheet_Rev.1.1.pdf\")",
+      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf)",
+      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf \"auto-calibration\" \"autocal\" \"0x155\" \"program eeprom\" \"EE_DONE\")",
+      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf \"calibration\" \"eeprom\")",
+      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf \"calibration\" \"eeprom\" \"autocal\")",
+      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf \"0x155\" \"Self-Calibration\" \"Program EEPROM\" \"AUTOCAL\" \"0x113\")",
+      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf --pages 2-3)"
     ],
     "additionalDirectories": [
       "c:\\Users\\isirc\\.claude\\projects\\c--dev-RDJ-Turntable\\memory"

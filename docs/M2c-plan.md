@@ -42,8 +42,12 @@ DMA/raw poll). Align values not persisted (re-align each boot until M2c-4 EEPROM
    - inverse Park: Uα = Ud·cosθ − Uq·sinθ ; Uβ = Ud·sinθ + Uq·cosθ
    - inverse Clarke / SVPWM → 3 phase duties around 50%; write TIM1 CCR1/2/3
    - start sinusoidal (inverse Clarke + 0.5 offset); add SVPWM center-shift later for bus usage
-4. **M2c-4 MT6826S auto-cal:** run at constant speed — see `docs/mt6826s-calibration.md`
-   (software trigger 0x5E→0x155, AUTOCAL_FREQ=0x4 for ~266–360 RPM, EEPROM 1000-cycle limit).
+4. **M2c-4 MT6826S auto-cal:** ✅ DONE. Must spin **open-loop** at constant speed (closed loop
+   injects eccentricity-synced ripple and fails the cal). KEY1 long-hold runs it: ramp open-loop
+   to ~180 RPM, AUTOCAL_FREQ=0x5 (100–200 RPM band, matches our 125 RPM operating point), trigger
+   0x5E→0x155, poll 0x113[7:6]. Auto-cal self-commits to EEPROM on success (no separate Program
+   EEPROM step) → power-cycle. Verified: velocity ripple dropped ~60% (±20%→±7%) at 13 rad/s.
+   See `docs/mt6826s-calibration.md` (verified against `docs/datasheets/MT6826S_Rev1.1.pdf`).
 
 ## Safety
 

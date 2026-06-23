@@ -5,8 +5,8 @@
  *   KEY0 (Play)  - toggle slow open-loop spin. While spinning we stream the commanded electrical
  *                  angle vs the MT6826S mechanical angle (M2c-1 pole-pair count = seconds per
  *                  mechanical rev at 1 elec rev/s; found 7).
- *   KEY1 (Speed) - run one-shot encoder alignment (M2c-2): park the rotor, solve zero-offset +
- *                  direction for closed-loop commutation.
+ *   KEY1 (Speed) - tap: one-shot encoder alignment (M2c-2). hold >2.5s: MT6826S auto-calibration
+ *                  (M2c-4, DESTRUCTIVE EEPROM write — power-cycle after success).
  *   KEY2 (Menu)  - toggle closed-loop VELOCITY control (M2c-3b): the TIM1 ISR reads the
  *                  MT6826S, commutes, and a PI loop holds vel_target. Run KEY1 align first.
  * Heartbeat LED + tonearm-encoder readout continue as before. Bare motor on the bench first.
@@ -31,15 +31,23 @@ constexpr float kPlatterRpm     = 33.3333f;
 constexpr float kBeltRatio      = 90.0f / 24.0f;                       /* platter:motor pulley dia */
 constexpr float kMotorTargetVel = kPlatterRpm * kBeltRatio * (2.0f * 3.14159265f / 60.0f);
 
+/* M2c-4 auto-cal: spin OPEN-LOOP at a steady speed (no feedback loop to inject eccentricity-
+ * synced ripple, which fails the cal). ~180 RPM motor -> AUTOCAL_FREQ=0x5 band (100-200 RPM). */
+constexpr float   kCalRpm     = 180.0f; /* open-loop motor speed during calibration */
+constexpr uint8_t kCalFreq    = 0x5;    /* 100-200 RPM band */
+constexpr float   kCalVoltage = 3.0f;   /* open-loop Uq to sustain sync at cal speed (bump if it slips) */
+
 /* KEY0 (PE8, active-low) doubles as the motor Play/stop toggle (screens also reads it). */
 gpio::Button play_key{ gpio::InputPin{ KEY0_GPIO_Port, KEY0_Pin, /*active_high=*/false } };
-/* KEY1 runs the one-shot M2c-2 encoder alignment. */
+/* KEY1: tap = M2c-2 encoder align, long-hold = M2c-4 auto-calibration (destructive). */
 gpio::Button align_key{ gpio::InputPin{ KEY1_GPIO_Port, KEY1_Pin, /*active_high=*/false } };
-/* KEY2 toggles M2c-3 closed-loop torque mode. */
+/* KEY2 toggles M2c-3 closed-loop velocity. */
 gpio::Button loop_key{ gpio::InputPin{ KEY2_GPIO_Port, KEY2_Pin, /*active_high=*/false } };
 
 bool spinning = false; /* open-loop spin (KEY0) */
-bool closed   = false; /* closed-loop torque (KEY2) */
+bool closed   = false; /* closed-loop velocity (KEY2) */
+
+constexpr uint32_t kCalHoldMs = 2500; /* KEY1 hold time that triggers auto-calibration */
 
 constexpr float kPi = 3.14159265f;
 
@@ -83,6 +91,70 @@ void run_alignment()
           static_cast<long>(dm_deg));
 }
 
+/* M2c-4: MT6826S user auto-calibration. Spins the motor at a steady ~150 RPM (closed loop),
+ * triggers the encoder's self-cal, polls status, and reports. DESTRUCTIVE: a successful run
+ * commits to the encoder's EEPROM (~1000-cycle endurance) and self-persists — power-cycle after.
+ * See docs/mt6826s-calibration.md. Triggered by a deliberate KEY1 long-hold. */
+void run_calibration()
+{
+    TRACE("\n>>> CALIBRATION: MT6826S auto-cal. ONE-TIME (writes EEPROM, ~1000-cycle life).\n");
+
+    mt6826s::set_autocal_freq(kCalFreq);     /* 0x5 = 100-200 RPM band */
+
+    /* Spin OPEN-LOOP: a constant electrical velocity gives uniform shaft rotation with no
+     * feedback loop injecting eccentricity-synced ripple. Ramp up so we don't lose sync. */
+    float target_elec  = (kCalRpm / 60.0f) * (2.0f * kPi) * foc::pole_pairs;
+    float saved_vlimit = foc::voltage_limit;
+    foc::voltage_limit = kCalVoltage;
+    TRACE(">>> open-loop spin-up to ~%u RPM...\n", static_cast<unsigned>(kCalRpm));
+    for (int i = 1; i <= 40; ++i) {          /* ~2 s ramp */
+        foc::set_open_loop_electrical_velocity(target_elec * i / 40.0f);
+        HAL_Delay(50);
+    }
+    HAL_Delay(1000);                          /* settle at speed */
+
+    /* Verify actual shaft speed (open-loop: the main loop may read the encoder directly). */
+    float a0 = read_mech_rad();
+    HAL_Delay(100);
+    float a1 = read_mech_rad();
+    float d = a1 - a0;
+    if (d >  kPi) d -= 2.0f * kPi;
+    if (d < -kPi) d += 2.0f * kPi;
+    int32_t rpm = static_cast<int32_t>((d / 0.1f) * (60.0f / (2.0f * kPi)));
+    TRACE(">>> measured shaft speed ~%ld RPM (need 100-200)\n", static_cast<long>(rpm));
+
+    if (rpm < 80 || rpm > 200) {
+        foc::voltage_limit = saved_vlimit;
+        foc::stop();
+        TRACE(">>> ABORT: not holding the cal band (sync slip?). Adjust kCalVoltage/kCalRpm.\n");
+        return;
+    }
+
+    mt6826s::start_autocal();                 /* write 0x5E -> 0x155 */
+    TRACE(">>> auto-cal running; holding open-loop >18 revs...\n");
+
+    mt6826s::CalStatus st = mt6826s::CalStatus::None;
+    for (int i = 0; i < 200; ++i) {           /* up to ~20 s */
+        HAL_Delay(100);
+        st = mt6826s::autocal_status();
+        if (st == mt6826s::CalStatus::Success || st == mt6826s::CalStatus::Failed) break;
+        if (i % 10 == 0) TRACE("    ... status=%u (running)\n", static_cast<unsigned>(st));
+    }
+
+    foc::voltage_limit = saved_vlimit;
+    if (st == mt6826s::CalStatus::Success) {
+        foc::stop();                          /* stop driving before further encoder ops */
+        TRACE(">>> CAL SUCCESS — coefficients committed to EEPROM.\n");
+        TRACE(">>> POWER-CYCLE the board now to load the calibration.\n");
+    } else {
+        mt6826s::stop_autocal();              /* exit cal mode so a retry is possible */
+        foc::stop();
+        TRACE(">>> CAL %s (status=%u). Check magnet/air-gap/speed and retry.\n",
+              st == mt6826s::CalStatus::Failed ? "FAILED" : "TIMED OUT",
+              static_cast<unsigned>(st));
+    }
+}
+
 }  // namespace
 
 void app_init(void)
@@ -113,9 +185,21 @@ void app_run(void)
         }
     }
 
-    /* KEY1 edge: run encoder alignment (only when motor idle). */
-    if (align_key.fell() && !spinning && !closed) {
-        run_alignment();
+    /* KEY1: tap (<2.5s) = align; long-hold (>=2.5s) = auto-calibration. Both motor-idle only. */
+    static uint32_t key1_t0 = 0;
+    static bool     key1_held = false;
+    if (align_key.pressed()) {
+        if (key1_t0 == 0) key1_t0 = now;
+        else if (!key1_held && (now - key1_t0) >= kCalHoldMs && !spinning && !closed) {
+            key1_held = true;        /* fire cal once, on the hold threshold */
+            run_calibration();
+        }
+    } else {
+        if (key1_t0 != 0 && !key1_held && !spinning && !closed) {
+            run_alignment();         /* short tap on release */
+        }
+        key1_t0 = 0;
+        key1_held = false;
     }
 
     /* KEY2 edge: toggle closed-loop velocity (not while open-loop spinning). */
