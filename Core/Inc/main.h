@@ -79,6 +79,10 @@ void Error_Handler(void);
 #define KEY2_GPIO_Port GPIOE
 #define AS_CS_Pin GPIO_PIN_12
 #define AS_CS_GPIO_Port GPIOB
+#define PLAT_EN_Pin GPIO_PIN_13
+#define PLAT_EN_GPIO_Port GPIOB
+#define PLAT_FAULT_Pin GPIO_PIN_14
+#define PLAT_FAULT_GPIO_Port GPIOB
 #define DISP_BL_Pin GPIO_PIN_12
 #define DISP_BL_GPIO_Port GPIOD
 

@@ -13,7 +13,12 @@
       "PowerShell(pip install --user --quiet pymupdf 2>&1)",
       "PowerShell(python -c \"import fitz; print\\('PyMuPDF', fitz.__doc__.split\\(chr\\(10\\)\\)[0] if fitz.__doc__ else 'ok'\\)\")",
       "Read(//c/Users/isirc/AppData/Local/Temp/**)",
-      "Bash(git commit -q -m ' *)"
+      "Bash(git commit -q -m ' *)",
+      "Read(//c/Users/isirc/.claude/projects/c--dev-RDJ-Turntable/memory/**)",
+      "Bash(cmake --build --preset Debug)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\isirc\\.claude\\projects\\c--dev-RDJ-Turntable\\memory"
     ]
   }
 }

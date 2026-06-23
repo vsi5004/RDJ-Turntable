@@ -20,6 +20,7 @@
 #include "main.h"
 #include "dma.h"
 #include "spi.h"
+#include "tim.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -92,6 +93,7 @@ int main(void)
   MX_SPI3_Init();
   MX_SPI1_Init();
   MX_SPI2_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   app_init();
   /* USER CODE END 2 */
