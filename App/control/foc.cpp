@@ -82,6 +82,7 @@ inline void sample_encoder()
 {
     mt6826s::Reading r;
     mt6826s::read(r);
+    if (!r.crc_ok) return; /* bad/timed-out read: hold last good angle, skip this tick */
     float raw = static_cast<float>(r.angle) * kCountToRad;
 
     if (g_resync) { g_raw_prev = raw; g_resync = false; } /* avoid a bogus first delta */

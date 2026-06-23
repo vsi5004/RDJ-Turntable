@@ -10,7 +10,6 @@
  * angle15 = (0x003 << 7) | (0x004 >> 1). The CRC check validates the framing on the bench.
  */
 #include "mt6826s.h"
-#include "spi.h" /* hspi1 */
 #include "gpio.hpp"
 
 namespace mt6826s {
@@ -20,6 +19,28 @@ constexpr uint8_t kCmdBurstRead = 0xA0; /* cmd 0b1010, address high nibble 0 */
 constexpr uint8_t kAngleAddr    = 0x03; /* start register 0x003 */
 
 const gpio::OutputPin cs{MT_CS_GPIO_Port, MT_CS_Pin, /*active_high=*/false}; /* active-low */
+
+/* Raw, bounded SPI1 transfer (no HAL): the FOC ISR calls read() at 20 kHz, so we avoid HAL's
+ * HAL_MAX_DELAY (which would hang the top-priority ISR forever if a flag never sets) and its
+ * per-call overhead. SPI1 is configured by CubeMX (8-bit, mode 3, soft-NSS); we just drive DR. */
+constexpr uint32_t kSpiSpin = 100000; /* ~ms-scale guard; returns false instead of hanging */
+
+bool spi1_xfer(const uint8_t* tx, uint8_t* rx, int n)
+{
+    SPI_TypeDef* const s = SPI1;
+    s->CR1 |= SPI_CR1_SPE; /* ensure the peripheral is enabled */
+    for (int i = 0; i < n; ++i) {
+        uint32_t g = kSpiSpin;
+        while (!(s->SR & SPI_SR_TXE)) if (--g == 0) return false;
+        *reinterpret_cast<volatile uint8_t*>(&s->DR) = tx[i];
+        g = kSpiSpin;
+        while (!(s->SR & SPI_SR_RXNE)) if (--g == 0) return false;
+        rx[i] = *reinterpret_cast<volatile uint8_t*>(&s->DR);
+    }
+    uint32_t g = kSpiSpin;
+    while (s->SR & SPI_SR_BSY) if (--g == 0) return false;
+    return true;
+}
 
 /* CRC-8, polynomial x^8+x^2+x+1 (0x07), init 0x00, MSB-first. */
 uint8_t crc8(const uint8_t* data, int n)
@@ -42,7 +63,7 @@ void read(Reading& out)
     uint8_t rx[6] = { 0 };
 
     cs.on();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), HAL_MAX_DELAY);
+    bool ok = spi1_xfer(tx, rx, sizeof(tx));
     cs.off();
 
     /* rx[0..1] clocked out during the command bytes; rx[2..5] = regs 0x003..0x006 */
@@ -51,8 +72,8 @@ void read(Reading& out)
     out.raw[2] = rx[4];
     out.raw[3] = rx[5];
     out.angle  = static_cast<uint16_t>((rx[2] << 7) | (rx[3] >> 1));
-    out.status = rx[4] & 0x07;                 /* STATUS[2:0] */
-    out.crc_ok = (crc8(&rx[2], 3) == rx[5]);   /* CRC covers regs 0x003..0x005 */
+    out.status = rx[4] & 0x07;                       /* STATUS[2:0] */
+    out.crc_ok = ok && (crc8(&rx[2], 3) == rx[5]);   /* false on transfer timeout too */
 }
 
 namespace {
@@ -73,7 +94,7 @@ void xfer3(const uint8_t tx[3], uint8_t rx[3])
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     cs.on();
-    HAL_SPI_TransmitReceive(&hspi1, const_cast<uint8_t*>(tx), rx, 3, HAL_MAX_DELAY);
+    spi1_xfer(tx, rx, 3);
     cs.off();
     if (!primask) __enable_irq();
 }

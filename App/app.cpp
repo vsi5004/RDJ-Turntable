@@ -19,6 +19,7 @@
 #include "control/mt6826s.h"
 #include "control/as5048a.h"
 #include "control/foc.h"
+#include "nvm.h"
 
 namespace {
 
@@ -89,6 +90,10 @@ void run_alignment()
     TRACE(">>> ALIGN done: offset=%u deg  dir=%c  (mech step %ld deg for +60 elec)\n",
           static_cast<unsigned>(off_deg), foc::direction > 0 ? '+' : '-',
           static_cast<long>(dm_deg));
+
+    /* Persist so closed loop is ready from boot without re-aligning (motor is stopped here). */
+    nvm::Cal cal{ foc::zero_elec_offset, foc::direction };
+    TRACE(">>> saving align cal to flash... %s\n", nvm::save(cal) ? "OK" : "FAILED");
 }
 
 /* M2c-4: MT6826S user auto-calibration. Spins the motor at a steady ~150 RPM (closed loop),
@@ -165,7 +170,18 @@ void app_init(void)
     TRACE("SYSCLK = %u Hz\n", static_cast<unsigned>(HAL_RCC_GetSysClockFreq()));
     screens::init();
     foc::init(); /* TIM1 PWM running; driver DISABLED until KEY0 */
-    TRACE("FOC ready. Press KEY0 to start open-loop spin (voltage_limit small, bare motor!).\n");
+
+    nvm::Cal cal;
+    if (nvm::load(cal)) {
+        foc::zero_elec_offset = cal.zero_offset;
+        foc::direction        = static_cast<int8_t>(cal.direction);
+        uint32_t off_deg = static_cast<uint32_t>(cal.zero_offset * (180.0f / kPi));
+        TRACE("Loaded align cal: offset=%u deg  dir=%c (closed loop ready).\n",
+              static_cast<unsigned>(off_deg), cal.direction > 0 ? '+' : '-');
+    } else {
+        TRACE("No stored align cal — run KEY1 align before closed loop.\n");
+    }
+    TRACE("FOC ready. KEY0 spin / KEY1 align(tap)+cal(hold) / KEY2 closed-loop.\n");
 }
 
 void app_run(void)

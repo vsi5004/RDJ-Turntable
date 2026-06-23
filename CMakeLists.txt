@@ -56,6 +56,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/control/as5048a.cpp
     # Control / motors
     App/control/foc.cpp
+    # Platform
+    App/platform/nvm.cpp
     # SEGGER RTT (vendored)
     third_party/SEGGER_RTT/SEGGER_RTT.c
     third_party/SEGGER_RTT/SEGGER_RTT_printf.c
