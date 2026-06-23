@@ -1,11 +1,14 @@
 /**
- * screens.h - array-driven ScreenKey layer (init all panels, poll keys, render).
+ * screens.h - array-driven ScreenKey layer (init all panels and render snapshots).
  */
 #pragma once
+
+#include "presenter.hpp"
 
 namespace screens {
 
 void init();  /* reset + init all panels, draw first-light pattern */
-void tick();  /* poll keys; (M1) redraw on press */
+void show(const hmi::View& view); /* redraw changed ScreenKeys from an immutable view */
+void tick();  /* reserved for incremental/non-blocking rendering */
 
 }  // namespace screens

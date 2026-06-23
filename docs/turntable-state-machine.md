@@ -1,7 +1,7 @@
 # Turntable state machine and ScreenKey behavior
 
-Status: **approved design baseline**. The system behavior, hardware boundaries, and initial
-three-ScreenKey interaction model are settled.
+Status: **approved design baseline**. The system behavior, hardware boundaries, diagnostic control
+authority, and initial three-ScreenKey interaction model are settled.
 
 ## 1. Purpose
 
@@ -19,19 +19,23 @@ about hardware details.
 ScreenKeys / CAN
       |
       v
-semantic Events
+ApplicationController --------> immutable Snapshot -----> HMI / CAN status
       |
-      v
-TurntableController -----> immutable Snapshot -----> HMI / CAN status
+      +---- Normal authority ----> TurntableController
       |
-      +---- IPlatter
-      +---- ITonearmCarriage
-      +---- ITonearmLift
-      +---- IClock
+      +---- Diagnostic authority -> DiagnosticController
+                                          |
+                    +---------------------+---------------------+
+                    |                     |                     |
+                IPlatter        ITonearmCarriage        ITonearmLift
 ```
 
 - `TurntableController` owns the product-level state and is the only component allowed to initiate
-  product state transitions.
+  product state transitions while normal authority is active.
+- `ApplicationController` owns control authority. It routes actuator commands from exactly one of
+  `TurntableController` or `DiagnosticController`; both can never command hardware concurrently.
+- `DiagnosticController` provides explicit, bounded lower-level tests without adding diagnostic
+  exceptions to normal product transitions. Section 10 defines its authority and safety boundary.
 - `IPlatter` owns platter drive modes, speed estimation, speed lock, and platter faults. The existing
   `foc::Mode` remains private motor-control state rather than becoming product state.
 - `ITonearmCarriage` owns carriage motion, breakbeam homing, unwrapped position, software limits,
@@ -45,6 +49,16 @@ TurntableController -----> immutable Snapshot -----> HMI / CAN status
 
 Concrete subsystem objects may be statically allocated and passed to the controller by reference.
 The interfaces do not require dynamic allocation.
+
+```cpp
+enum class ControlAuthority : uint8_t {
+    Normal,
+    Diagnostic,
+};
+```
+
+`ControlAuthority` is not a turntable product state. Changing it is an application-level handoff
+with explicit safe entry and exit sequences.
 
 ## 3. Persistent and session data
 
@@ -103,6 +117,10 @@ waited on, making traces and fault reports understandable without reconstructing
 | `Maintenance` | An exclusive, explicitly selected hardware procedure owns the relevant subsystems. |
 | `Fault` | A latched fault is displayed and safe-state commands have been issued. |
 
+Diagnostic mode is deliberately absent from this table. The normal product controller is suspended
+while `DiagnosticController` owns the same subsystem interfaces; it is not weakened with bypass
+transitions.
+
 ### Nominal flow
 
 ```mermaid
@@ -158,6 +176,15 @@ stateDiagram-v2
 
 Settings navigation events are consumed by the HMI and are not product events unless they commit a
 setting or request a maintenance operation.
+
+Application-level diagnostic events are handled outside the normal product transition table:
+
+| Event | Payload | Consumer |
+|---|---|---|
+| `EnterDiagnosticsRequested` | none | `ApplicationController` starts safe authority handoff. |
+| `ExitDiagnosticsRequested` | none | `ApplicationController` starts safe diagnostic shutdown. |
+| `DiagnosticCommandRequested` | `DiagnosticCommand` | `DiagnosticController` validates and runs one test. |
+| `DiagnosticAbortRequested` | none | `DiagnosticController` safely aborts the active test. |
 
 ### Subsystem completions and observations
 
@@ -370,21 +397,159 @@ only a promoted fault reaches the product controller.
 - platter motor electrical alignment;
 - MT6826S user calibration;
 - carriage re-home;
-- platter speed-loop tuning/diagnostic runs.
+- other repeatable, product-supported calibration procedures.
 
 Each operation declares prerequisites, affected subsystems, whether it is cancellable, and whether it
 invalidates carriage home. Dangerous operations are unavailable during playback. Existing blocking
 alignment/calibration routines must become incremental operations before they are integrated into the
 controller; the product main loop must never use multi-second `HAL_Delay()` calls.
 
-Read-only diagnostics do not require `Maintenance` and may remain visible during playback.
+Read-only status and diagnostic views do not require `Maintenance` and may remain visible during
+playback.
 
-## 10. Snapshot contract
+## 10. Diagnostic control authority
 
-The HMI and CAN layer receive a read-only snapshot rather than inspecting controller internals:
+Diagnostic mode exists to develop and validate lower-level drivers and control functions in
+isolation from the normal turntable workflow. It is a separate controller, not a collection of
+special cases inside `TurntableController` and not an unrestricted path to HAL functions.
+
+### Diagnostic states
 
 ```cpp
-struct Snapshot {
+enum class DiagnosticState : uint8_t {
+    Inactive,
+    EnteringSafe,
+    Ready,
+    Running,
+    Stopping,
+    Fault,
+};
+
+enum class DiagnosticStopIntent : uint8_t {
+    AbortCommand,
+    ExitMode,
+};
+```
+
+| State | Meaning |
+|---|---|
+| `Inactive` | Normal control authority owns the subsystems. |
+| `EnteringSafe` | Product workflow is quiescing before ownership transfer. |
+| `Ready` | Diagnostic authority is active with every actuator neutral or disabled. |
+| `Running` | One selected diagnostic command or recipe owns its declared subsystem set. |
+| `Stopping` | Abort/exit is neutralizing outputs; `DiagnosticStopIntent` names the completion path. |
+| `Fault` | A diagnostic or hardware fault is latched; only safe/read-only commands remain legal. |
+
+### Authority handoff
+
+Active diagnostic entry is allowed only from `Idle` or `NeedsHome`. Fault details and passive sensor
+readouts may be viewed from normal `Fault`, but actuator authority is not transferred while an
+underlying hardware fault remains asserted.
+
+Entry proceeds as follows:
+
+1. Reject new normal product events.
+2. Stop and disable platter drive.
+3. Disable carriage servo-follow and stop carriage motion.
+4. Command the tonearm raised and wait for its conservative PWM settling interval.
+5. Cancel outstanding product operation IDs and drain stale completion events.
+6. Transfer all subsystem command routing to `DiagnosticController` and enter `Ready`.
+
+Exit or global Stop proceeds as follows:
+
+1. Abort the active diagnostic command or recipe.
+2. Disable platter drive, stop carriage motion, disable servo-follow, and command the tonearm raised.
+3. Wait for bounded safe completion, then relinquish diagnostic authority.
+4. Invalidate carriage home if a diagnostic moved the carriage without completing a valid breakbeam
+   home, changed its coordinate model, or left position confidence uncertain.
+5. Resume normal authority in `Idle` only when home is still valid and the carriage is parked;
+   otherwise resume in `NeedsHome`.
+
+No previous active playback workflow is resumed after diagnostics.
+
+| Current authority/state | Event | Guard | Action | Next authority/state |
+|---|---|---|---|---|
+| Normal / `Idle` or `NeedsHome` | `EnterDiagnosticsRequested` | no asserted blocking fault | start safe entry sequence | Normal / `EnteringSafe` |
+| Normal / `EnteringSafe` | safe entry complete | matching operation ID | cancel product operations; transfer command routing | Diagnostic / `Ready` |
+| Normal / `EnteringSafe` | `CancelRequested` | before authority transfer | retain neutral outputs | Normal / prior safe product state |
+| Diagnostic / `Ready` | `DiagnosticCommandRequested` | command prerequisites and limits valid | claim declared subsystem set; start command | Diagnostic / `Running` |
+| Diagnostic / `Running` | command completed | matching command ID | publish result; release claimed subsystems | Diagnostic / `Ready` |
+| Diagnostic / `Running` | `DiagnosticAbortRequested` | always | begin bounded neutralization | Diagnostic / `Stopping` |
+| Diagnostic / `Stopping` | safe stop complete | matching command ID | publish aborted result; release claimed subsystems | Diagnostic / `Ready` |
+| Diagnostic / `Ready` | `ExitDiagnosticsRequested` | no active command | start safe exit sequence | Diagnostic / `Stopping` |
+| Diagnostic / `Stopping` | safe exit complete | exit requested | relinquish authority; apply home-validity rule | Normal / `Idle` or `NeedsHome` |
+| any diagnostic state | promoted fault | always | perform diagnostic safe-state actions; latch fault | Diagnostic / `Fault` |
+| Diagnostic / `Fault` | acknowledge | underlying condition cleared | clear fault; retain neutral outputs | Diagnostic / `Ready` |
+| Diagnostic / `Fault` | `ExitDiagnosticsRequested` | always | retain neutral outputs; start safe exit | Diagnostic / `Stopping` |
+
+### Safety that diagnostics cannot bypass
+
+Diagnostic mode bypasses product sequencing, not hardware protection. The following remain enforced
+below both controllers:
+
+- driver fault shutdown and output disable;
+- absolute voltage, PWM, velocity, travel, and operation-duration ceilings;
+- carriage software limits whenever home is valid;
+- reduced jog speed/voltage and bounded travel when carriage home is unknown;
+- one command owner per subsystem and one active motion recipe at a time;
+- watchdog servicing and non-blocking deadlines;
+- global long-hold Stop from every diagnostic screen;
+- stale operation-ID rejection and fault latching.
+
+Actuator tests require an explicit arm/confirm action. A diagnostic may request a deliberately broad
+test range, but it cannot raise the compiled absolute safety ceilings. Overrides that would defeat a
+hardware protection belong in a separate bench firmware, not in this application.
+
+### Diagnostic command model
+
+The HMI, CAN, or a future debug console submits typed commands to `DiagnosticController`; none calls
+`foc`, HAL, or a concrete driver directly.
+
+```cpp
+struct DiagnosticCommand {
+    DiagnosticTarget target;
+    DiagnosticAction action;
+    DiagnosticParameters parameters;
+    uint32_t command_id;
+};
+```
+
+Each command declares its required subsystem ownership, prerequisites, conservative limits,
+deadline, cancellation behavior, and whether successful or aborted execution invalidates carriage
+home. Commands publish progress and results through a diagnostic snapshot.
+
+The initial catalog should cover:
+
+| Target | Isolated tests |
+|---|---|
+| Displays and keys | color/pattern fills, DMA refresh, key edges/holds, backlight |
+| MT6826S / platter driver | raw angle/status, open-loop spin, electrical hold/alignment, torque and velocity control, fault input |
+| Platter feedback | ABI edge period, index detection, measured RPM, lock detector |
+| Tonearm carriage | raw encoder, breakbeam, low-speed jog, home, absolute move, software-limit check, servo-follow test |
+| Tonearm lift | raise/lower PWM, pulse-width adjustment, estimated travel-time measurement |
+| Integrated recipes | platter lock disturbance test, safe speed change, end-of-side detector stimulus |
+
+Single-subsystem tests are the default. Integrated recipes explicitly claim all affected subsystems
+and remain separate from normal product behavior.
+
+### Development and production availability
+
+The Settings menu exposes **Diagnostics** only when enabled by a build option or stored service-mode
+setting. Entry requires a confirmation screen. Read-only status may remain available in normal builds;
+manual actuator commands may be compiled out for a production image without changing the controller
+interfaces.
+
+The existing M2c ScreenKey bring-up actions in `app.cpp` should migrate into this diagnostic command
+catalog as the first implementation. This preserves proven bench workflows while removing direct key
+ownership and motor-mode booleans from the application top level.
+
+## 11. Snapshot contract
+
+The HMI and CAN layer receive a read-only application snapshot rather than inspecting controller
+internals. Both payloads are statically stored; `authority` selects which one supplies active actions.
+
+```cpp
+struct TurntableSnapshot {
     State state;
     RecordSpeed selected_speed;
     Rpm measured_speed;
@@ -395,12 +560,28 @@ struct Snapshot {
     FaultSummary fault;
     AvailableActions actions;
 };
+
+struct DiagnosticSnapshot {
+    DiagnosticState state;
+    DiagnosticTarget target;
+    DiagnosticAction action;
+    DiagnosticMeasurements measurements;
+    DiagnosticResult result;
+    AvailableDiagnosticActions actions;
+};
+
+struct ApplicationSnapshot {
+    ControlAuthority authority;
+    TurntableSnapshot turntable;
+    DiagnosticSnapshot diagnostic;
+};
 ```
 
-`AvailableActions` is calculated by the controller or a domain presenter. The HMI renders it; it does
-not duplicate transition guards. This ensures ScreenKeys and CAN expose the same legal actions.
+Available actions are calculated by the active controller or a domain presenter. The HMI renders
+them; it does not duplicate transition guards. Actions from the inactive authority are never exposed
+as enabled. This ensures ScreenKeys and CAN expose the same legal actions.
 
-## 11. Three-ScreenKey behavior
+## 12. Three-ScreenKey behavior
 
 The normal view keeps stable physical roles:
 
@@ -450,6 +631,23 @@ is discoverable rather than a hidden gesture.
   are not met.
 - Fault state changes this key to **DETAILS** so the user can inspect the root fault and recovery
   requirement.
+- When service mode is enabled and entry guards are satisfied, Settings exposes **Diagnostics** with
+  an explicit confirmation step.
+
+### Diagnostic ScreenKey behavior
+
+Diagnostic screens are driven by the selected command descriptor rather than hard-coded motor logic:
+
+| Diagnostic view | Key 0 | Key 1 | Key 2 |
+|---|---|---|---|
+| Target browser | Back/Exit | Select target | Next target |
+| Test browser | Back | Arm/select test | Next test |
+| Parameter edit | Cancel | Run/Apply | Change value |
+| Running | Stop/Abort | Live measurement | Details/next measurement |
+| Result | Back | Repeat | Details |
+
+Long-hold Key 0 always performs global diagnostic Stop, even when its tap action is Back or Cancel.
+The running view must distinguish commanded values from measured or estimated values.
 
 ### Proposed three-key Settings navigation
 
@@ -465,7 +663,7 @@ This temporarily repurposes the transport key. A long hold on Key 0 remains a gl
 while Settings is open. If Settings grows beyond a shallow carousel, or if permanent one-press
 transport access is required, a fourth ScreenKey is preferable to adding more hidden gestures.
 
-## 12. C++ implementation rules
+## 13. C++ implementation rules
 
 - Use `enum class` and small value types; do not encode workflow state with public booleans.
 - Keep controller data private. All state changes pass through one `transition_to()` function.
@@ -478,11 +676,14 @@ transport access is required, a fourth ScreenKey is preferable to adding more hi
 - Test every legal transition, ignored event, cancellation, stale operation ID, deadline, and fault
   recovery destination.
 - Trace transitions as `old state -> event -> new state` with operation and fault IDs.
+- Make control-authority handoff explicit and test that normal and diagnostic controllers can never
+  issue concurrent subsystem commands.
 
-## 13. Settled HMI interaction decisions
+## 14. Settled HMI interaction decisions
 
 - Key 0 uses **tap for Play/Pause/Resume** and **hold for Stop** while playing or paused.
 - Settings temporarily repurposes all three keys for contextual navigation.
 - Long-hold Key 0 remains a global Stop override while Settings is open.
+- Long-hold Key 0 also remains the global Stop/Abort override throughout diagnostic mode.
 - The exact hold duration is a configurable HMI parameter to tune during implementation; the display
   must make hold progress visible.

@@ -36,6 +36,7 @@ inline float    vel_lpf_a  = 0.1f;   /* velocity low-pass EMA coeff (~18 Hz @ 1 
 /* Filled by the M2c-2 alignment routine; consumed by closed-loop commutation (M2c-3). */
 inline float    zero_elec_offset = 0.0f; /* mechanical angle (rad) where theta_elec == 0 */
 inline int8_t   direction        = 1;    /* +1 / -1: sign of mechanical vs electrical motion */
+inline bool     alignment_valid  = false;/* set only after validated NVM load or live alignment */
 
 enum class Mode : uint8_t { Idle, OpenLoop, Align, ClosedLoop, Velocity };
 

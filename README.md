@@ -46,6 +46,19 @@ cmake --build --preset Debug
 
 Output: `build/Debug/RDJ-Turntable.elf`.
 
+## Host tests
+
+The product state machine, diagnostic authority, event handling, and platter-feedback algorithms are
+HAL-free and have a native C++ test target. Docker provides the pinned GCC 14 environment:
+
+```powershell
+docker build -t rdj-turntable-tests -f tests/Dockerfile .
+docker run --rm --mount type=bind,source="${PWD}",target=/src rdj-turntable-tests `
+  bash /src/tests/run-host-tests.sh
+```
+
+Without Docker, configure `tests/` as a standalone CMake project using any C++17 desktop compiler.
+
 ## Flash & debug
 
 In VS Code, press **F5** (the `Debug (J-Link)` launch config): it builds, flashes over SWD,
@@ -85,3 +98,7 @@ See [docs/](docs/) for the CubeMX configuration applied at each milestone.
 
 The approved full-system operational model and three-ScreenKey behavior are specified in
 [docs/turntable-state-machine.md](docs/turntable-state-machine.md).
+
+During mechanical bring-up, development firmware boots into the diagnostic authority. The existing
+M2c platter spin, alignment, encoder calibration, and velocity-loop exercises remain available through
+the three ScreenKeys without bypassing the new single-owner control architecture.

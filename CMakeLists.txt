@@ -14,6 +14,8 @@ set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(RDJ_BOOT_DIAGNOSTICS "Boot into commissioning diagnostics instead of normal operation" ON)
+
 
 # Define the build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -48,16 +50,24 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Application layer
     App/app.cpp
+    # Product state / diagnostic domain (HAL-free)
+    App/turntable/controller.cpp
+    App/turntable/application_controller.cpp
+    App/diagnostics/diagnostic_controller.cpp
+    App/diagnostics/m2c_executor.cpp
     # HMI / displays
     App/hmi/st7735.cpp
     App/hmi/screens.cpp
+    App/hmi/presenter.cpp
     # Control / encoders
     App/control/mt6826s.cpp
     App/control/as5048a.cpp
     # Control / motors
     App/control/foc.cpp
+    App/control/platter_feedback.cpp
     # Platform
     App/platform/nvm.cpp
+    App/platform/system_adapters.cpp
     # SEGGER RTT (vendored)
     third_party/SEGGER_RTT/SEGGER_RTT.c
     third_party/SEGGER_RTT/SEGGER_RTT_printf.c
@@ -69,12 +79,14 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     App/platform
     App/hmi
     App/control
+    App/turntable
+    App/diagnostics
     third_party/SEGGER_RTT
 )
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
+    RDJ_BOOT_DIAGNOSTICS=$<BOOL:${RDJ_BOOT_DIAGNOSTICS}>
 )
 
 # Remove wrong libob.a library dependency when using cpp files
