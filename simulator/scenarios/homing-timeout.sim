@@ -1,0 +1,9 @@
+# A jammed carriage times out during homing and invalidates home confidence.
+stall carriage on
+initialize
+await Fault 17000
+wait 1000
+clear-fault
+ack-fault
+expect NeedsHome
+status

@@ -1,0 +1,16 @@
+# A retryable platter fault preserves home and returns to Interrupted.
+initialize
+await Idle 8000
+play
+await Playing 8000
+fault platter-driver retryable keep-home
+expect Fault
+wait 1000
+clear-fault
+ack-fault
+expect Interrupted
+resume
+await Playing 8000
+stop
+await Idle 10000
+status

@@ -59,6 +59,24 @@ docker run --rm --mount type=bind,source="${PWD}",target=/src rdj-turntable-test
 
 Without Docker, configure `tests/` as a standalone CMake project using any C++17 desktop compiler.
 
+## Host simulator
+
+The same host build also produces `turntable_sim`, a deterministic full-system simulator backed by
+the production state-machine interfaces. It models platter acceleration and lock, carriage homing
+and travel, the timed tonearm lift, injected faults, and device stalls without requiring hardware.
+
+Run one of the checked-in scenarios through Docker:
+
+```powershell
+docker run --rm --mount type=bind,source="${PWD}",target=/src rdj-turntable-tests `
+  bash /src/tests/run-simulator.sh nominal
+```
+
+Scenario commands include `initialize`, `play`, `pause`, `resume`, `stop`, `speed 33|45`,
+`end-side`, `wait`, `await`, `expect`, `stall`, and recoverable or home-invalidating `fault`
+injection. The scenarios under `simulator/scenarios/` are also executed by the host test suite.
+See [simulator/README.md](simulator/README.md) for the scenario language and fault options.
+
 ## Flash & debug
 
 In VS Code, press **F5** (the `Debug (J-Link)` launch config): it builds, flashes over SWD,

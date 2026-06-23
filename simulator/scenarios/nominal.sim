@@ -1,0 +1,16 @@
+# Initialize, play, pause, change speed, resume, then simulate end of side.
+expect NeedsHome
+initialize
+await Idle 8000
+play
+await Playing 8000
+pause
+await Paused 2000
+speed 45
+await Paused 4000
+resume
+await Playing 2000
+wait 1000
+end-side
+await Idle 10000
+status
