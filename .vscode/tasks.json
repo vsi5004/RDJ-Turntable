@@ -23,6 +23,21 @@
       "command": "cmake",
       "args": ["--build", "--preset", "Debug", "--target", "clean"],
       "problemMatcher": []
+    },
+    {
+      "label": "CMake Configure (ScreenKey Demo)",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--preset", "ScreenKeyDemo"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Build (ScreenKey Demo)",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "--preset", "ScreenKeyDemo"],
+      "problemMatcher": ["$gcc"],
+      "dependsOn": ["CMake Configure (ScreenKey Demo)"]
     }
   ]
 }

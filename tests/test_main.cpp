@@ -1,7 +1,11 @@
 #include "turntable/application_controller.hpp"
 #include "control/platter_feedback.hpp"
+#include "hmi/interaction_controller.hpp"
+#include "hmi/presenter.hpp"
+#include "hmi/screenkey_demo.hpp"
 
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -14,6 +18,8 @@ int failures = 0;
             ++failures;                                                                             \
         }                                                                                           \
     } while (false)
+
+#define CHECK_TEXT(actual, expected) CHECK(std::strcmp((actual), (expected)) == 0)
 
 class FakeClock final : public turntable::IClock {
 public:
@@ -386,6 +392,239 @@ void test_maintenance_lifecycle()
     CHECK(controller.state() == turntable::State::NeedsHome);
 }
 
+turntable::ApplicationSnapshot normal_snapshot(turntable::State state)
+{
+    turntable::ApplicationSnapshot snapshot;
+    snapshot.authority = turntable::ControlAuthority::Normal;
+    snapshot.state = turntable::ApplicationState::Normal;
+    snapshot.turntable.state = state;
+    return snapshot;
+}
+
+void test_screenkey_settings_navigation_and_guards()
+{
+    hmi::InteractionController interaction;
+    turntable::ApplicationSnapshot snapshot = normal_snapshot(turntable::State::Idle);
+    snapshot.turntable.actions.add(turntable::Action::OpenSettings);
+    snapshot.turntable.actions.add(turntable::Action::EnterDiagnostics);
+
+    CHECK(interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot).type
+          == hmi::IntentType::None);
+    CHECK(interaction.snapshot().mode == hmi::Mode::SettingsBrowse);
+    CHECK(interaction.snapshot().settings_item == hmi::SettingsItem::SystemStatus);
+    hmi::View view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[1].action, "STATUS");
+
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().settings_item == hmi::SettingsItem::Diagnostics);
+    view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[1].action, "DIAGNOSTIC");
+    CHECK(view.keys[1].enabled);
+
+    interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().mode == hmi::Mode::DiagnosticConfirmation);
+    view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[1].action, "ENTER");
+    const hmi::Intent enter =
+        interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(enter.type == hmi::IntentType::EnterDiagnostics);
+    CHECK(interaction.snapshot().mode == hmi::Mode::Primary);
+
+    hmi::InteractionController blocked;
+    snapshot.turntable.actions = {};
+    blocked.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    blocked.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    view = hmi::present(snapshot, blocked.snapshot());
+    CHECK_TEXT(view.keys[1].detail, "STOP FIRST");
+    CHECK(!view.keys[1].enabled);
+    blocked.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(blocked.snapshot().mode == hmi::Mode::SettingsBrowse);
+
+    blocked.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(blocked.snapshot().settings_item == hmi::SettingsItem::Brightness);
+    blocked.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(blocked.snapshot().mode == hmi::Mode::Brightness);
+    view = hmi::present(snapshot, blocked.snapshot());
+    CHECK_TEXT(view.keys[2].action, "NO PWM");
+    CHECK(!view.keys[2].enabled);
+}
+
+void test_screenkey_transport_and_global_stop()
+{
+    hmi::InteractionController interaction;
+    turntable::ApplicationSnapshot snapshot = normal_snapshot(turntable::State::SpinningUpForPlay);
+    snapshot.turntable.actions.add(turntable::Action::Stop);
+    hmi::Intent intent =
+        interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.type == hmi::IntentType::TurntableEvent);
+    CHECK(intent.event.type == turntable::EventType::StopRequested);
+
+    snapshot.turntable.state = turntable::State::Playing;
+    snapshot.turntable.actions.add(turntable::Action::Pause);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().mode == hmi::Mode::SettingsBrowse);
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
+    CHECK(intent.type == hmi::IntentType::TurntableEvent);
+    CHECK(intent.event.type == turntable::EventType::StopRequested);
+    CHECK(interaction.snapshot().mode == hmi::Mode::Primary);
+
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.event.type == turntable::EventType::PauseRequested);
+}
+
+void test_screenkey_fault_details_and_status_views()
+{
+    hmi::InteractionController interaction;
+    turntable::ApplicationSnapshot snapshot = normal_snapshot(turntable::State::Fault);
+    snapshot.turntable.actions.add(turntable::Action::AcknowledgeFault);
+    snapshot.turntable.fault = {turntable::FaultCode::CarriageStall,
+                                turntable::FaultSource::Carriage,
+                                turntable::RecoveryPolicy::RequiresCarriageHome, true, 100};
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().mode == hmi::Mode::FaultDetails);
+    hmi::View view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[1].action, "CARRIAGE");
+    CHECK_TEXT(view.keys[1].detail, "STALL");
+    CHECK_TEXT(view.keys[2].action, "REHOME");
+    CHECK_TEXT(view.keys[2].detail, "HOME LOST");
+
+    interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    const hmi::Intent acknowledge =
+        interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(acknowledge.type == hmi::IntentType::TurntableEvent);
+    CHECK(acknowledge.event.type == turntable::EventType::AcknowledgeFaultRequested);
+
+    snapshot = normal_snapshot(turntable::State::Playing);
+    snapshot.turntable.home = turntable::HomeConfidence::Valid;
+    snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm33;
+    snapshot.turntable.measured_rpm = 33.31f;
+    hmi::InteractionController status;
+    status.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    status.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    view = hmi::present(snapshot, status.snapshot());
+    CHECK_TEXT(view.keys[1].action, "PLAYING");
+    CHECK_TEXT(view.keys[2].action, "33 RPM");
+    CHECK_TEXT(view.keys[2].detail, "33.3 RPM");
+}
+
+void test_screenkey_diagnostic_shortcuts()
+{
+    hmi::InteractionController interaction({1.25f, 3.5f});
+    turntable::ApplicationSnapshot snapshot;
+    snapshot.authority = turntable::ControlAuthority::Diagnostic;
+    snapshot.state = turntable::ApplicationState::Diagnostic;
+    snapshot.diagnostic.state = diagnostics::State::Ready;
+
+    hmi::Intent intent =
+        interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.type == hmi::IntentType::SubmitDiagnostic);
+    CHECK(intent.diagnostic.action == diagnostics::Action::OpenLoopSpin);
+    CHECK(intent.diagnostic.parameters.value == 1.25f);
+
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
+    CHECK(intent.type == hmi::IntentType::ExitDiagnostics);
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::ElectricalAlign);
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Hold, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::EncoderAutoCal);
+    intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::ClosedLoopVelocity);
+    CHECK(intent.diagnostic.parameters.value == 3.5f);
+
+    hmi::View view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[0].detail, "HOLD EXIT");
+
+    snapshot.diagnostic.state = diagnostics::State::Running;
+    snapshot.diagnostic.command.action = diagnostics::Action::OpenLoopSpin;
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.type == hmi::IntentType::AbortDiagnostic);
+
+    snapshot.diagnostic.state = diagnostics::State::Fault;
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.type == hmi::IntentType::AcknowledgeDiagnosticFault);
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
+    CHECK(intent.type == hmi::IntentType::ExitDiagnostics);
+    view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[0].action, "ACK");
+}
+
+void test_screenkey_demo_walkthrough()
+{
+    hmi::ScreenKeyDemo demo({1.0f, 2.0f});
+    demo.reset(0);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::NeedsHome);
+
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 0);
+    CHECK(demo.application_snapshot().turntable.state
+          == turntable::State::RaisingForInitialization);
+    demo.tick(600);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::HomingCarriage);
+    demo.tick(1800);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::ParkingCarriage);
+    demo.tick(2400);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::Idle);
+    CHECK(demo.application_snapshot().turntable.home == turntable::HomeConfidence::Valid);
+
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 2400);
+    demo.tick(3400);
+    demo.tick(4000);
+    demo.tick(4600);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::Playing);
+
+    demo.handle(hmi::Key::Settings, hmi::Gesture::Tap, 4600);
+    CHECK(demo.navigation_snapshot().mode == hmi::Mode::SettingsBrowse);
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Hold, 4600);
+    CHECK(demo.navigation_snapshot().mode == hmi::Mode::Primary);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::RaisingForStop);
+    demo.tick(5200);
+    demo.tick(6000);
+    demo.tick(6600);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::Idle);
+
+    demo.handle(hmi::Key::Settings, hmi::Gesture::Hold, 6600);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::Fault);
+    CHECK(demo.application_snapshot().turntable.fault.invalidates_home);
+    demo.handle(hmi::Key::Settings, hmi::Gesture::Tap, 6600);
+    CHECK(demo.navigation_snapshot().mode == hmi::Mode::FaultDetails);
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 6600);
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 6600);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::NeedsHome);
+}
+
+void test_screenkey_demo_diagnostic_shortcuts()
+{
+    hmi::ScreenKeyDemo demo({1.0f, 2.0f});
+    demo.reset(0);
+    demo.handle(hmi::Key::Settings, hmi::Gesture::Tap, 0);
+    demo.handle(hmi::Key::Settings, hmi::Gesture::Tap, 0);
+    demo.handle(hmi::Key::Speed, hmi::Gesture::Tap, 0);
+    CHECK(demo.navigation_snapshot().mode == hmi::Mode::DiagnosticConfirmation);
+    demo.handle(hmi::Key::Speed, hmi::Gesture::Tap, 0);
+    CHECK(demo.application_snapshot().state
+          == turntable::ApplicationState::EnteringDiagnostic);
+    demo.tick(600);
+    CHECK(demo.application_snapshot().authority == turntable::ControlAuthority::Diagnostic);
+    CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
+
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 600);
+    CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Running);
+    CHECK(demo.application_snapshot().diagnostic.command.action
+          == diagnostics::Action::OpenLoopSpin);
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Hold, 600);
+    CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Stopping);
+    demo.tick(1100);
+    CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
+
+    demo.handle(hmi::Key::Settings, hmi::Gesture::Hold, 1100);
+    CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Fault);
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 1100);
+    CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Hold, 1100);
+    demo.tick(1600);
+    CHECK(demo.application_snapshot().authority == turntable::ControlAuthority::Normal);
+    CHECK(demo.application_snapshot().turntable.state == turntable::State::NeedsHome);
+}
+
 }  // namespace
 
 int main()
@@ -398,6 +637,12 @@ int main()
     test_application_authority_handoff();
     test_period_rpm_estimator_and_lock_detector();
     test_maintenance_lifecycle();
+    test_screenkey_settings_navigation_and_guards();
+    test_screenkey_transport_and_global_stop();
+    test_screenkey_fault_details_and_status_views();
+    test_screenkey_diagnostic_shortcuts();
+    test_screenkey_demo_walkthrough();
+    test_screenkey_demo_diagnostic_shortcuts();
 
     if (failures == 0) {
         std::printf("All turntable tests passed.\n");

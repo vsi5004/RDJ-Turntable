@@ -684,6 +684,24 @@ transport access is required, a fourth ScreenKey is preferable to adding more hi
 - Key 0 uses **tap for Play/Pause/Resume** and **hold for Stop** while playing or paused.
 - Settings temporarily repurposes all three keys for contextual navigation.
 - Long-hold Key 0 remains a global Stop override while Settings is open.
+- Global Stop closes Settings immediately and returns the displays to transport progress.
 - Long-hold Key 0 also remains the global Stop/Abort override throughout diagnostic mode.
+- Settings v1 contains **System Status**, **Diagnostics**, and **Display Brightness**. Brightness is
+  shown as hardware-pending until a dimmable backlight output is selected; the UI does not pretend
+  that the current on/off backlight GPIO supports intensity control.
+- During current platter bring-up, diagnostic mode retains the three direct platter-development
+  shortcuts (spin, alignment/encoder calibration, and closed-loop velocity). The target/test browser
+  remains the expansion path when additional hardware is ready.
+- In the diagnostic shortcut view, holding Key 0 aborts a running command; holding it while Ready
+  exits diagnostic authority safely.
 - The exact hold duration is a configurable HMI parameter to tune during implementation; the display
   must make hold progress visible.
+
+### Physical ScreenKey demo build
+
+`RDJ_SCREENKEY_DEMO` is a mutually exclusive, display-only build mode for testing the production
+renderer and physical keys before the mechanisms are available. It reasserts the platter driver
+enable low, does not start FOC PWM, does not load or run actuator diagnostics, and substitutes a
+deterministic synthetic application snapshot. Short timers demonstrate initialization, playback,
+pause/resume, speed change, Stop, settings, diagnostic shortcuts, and fault views. Demo-only Key 2
+holds inject product or diagnostic faults so their presentation and recovery paths can be inspected.

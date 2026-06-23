@@ -1,5 +1,6 @@
 #include "simulation.hpp"
 
+#include "hmi/presenter.hpp"
 #include "turntable/controller.hpp"
 
 #include <algorithm>
@@ -448,6 +449,10 @@ private:
             print_status();
             return true;
         }
+        if (command == "screenkeys" && words.size() == 1) {
+            print_screenkeys();
+            return true;
+        }
         return false;
     }
 
@@ -566,6 +571,21 @@ private:
                 << " rpm=" << std::fixed << std::setprecision(2) << snapshot.measured_rpm
                 << " carriage=" << snapshot.carriage_position_mm << "mm home="
                 << (snapshot.home == HomeConfidence::Valid ? "valid" : "unknown") << '\n';
+    }
+
+    void print_screenkeys()
+    {
+        turntable::ApplicationSnapshot application;
+        application.authority = turntable::ControlAuthority::Normal;
+        application.state = turntable::ApplicationState::Normal;
+        application.turntable = controller_.snapshot();
+        const hmi::View view = hmi::present(application);
+        for (std::size_t index = 0; index < 3; ++index) {
+            const hmi::KeyView& key = view.keys[index];
+            output_ << timestamp() << " KEY" << index << ' ' << key.header << " | "
+                    << key.action << " | " << key.detail
+                    << (key.enabled ? "" : " [disabled]") << '\n';
+        }
     }
 
     std::string timestamp() const

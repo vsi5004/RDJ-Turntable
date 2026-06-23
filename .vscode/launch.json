@@ -19,6 +19,25 @@
           { "type": "console", "label": "RTT", "port": 0 }
         ]
       }
+    },
+    {
+      "name": "ScreenKey Demo (J-Link)",
+      "cwd": "${workspaceFolder}",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "jlink",
+      "device": "STM32F407VE",
+      "interface": "swd",
+      "executable": "${workspaceFolder}/build/ScreenKeyDemo/RDJ-Turntable.elf",
+      "runToEntryPoint": "main",
+      "preLaunchTask": "Build (ScreenKey Demo)",
+      "rttConfig": {
+        "enabled": true,
+        "address": "auto",
+        "decoders": [
+          { "type": "console", "label": "RTT", "port": 0 }
+        ]
+      }
     }
   ]
 }

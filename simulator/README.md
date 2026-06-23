@@ -40,6 +40,7 @@ One command is accepted per line. Blank lines and text following `#` are ignored
 | `fault <code> <policy> <home>` | Inject a typed subsystem fault. |
 | `clear-fault`, `ack-fault` | Exercise the two-step fault recovery handshake. |
 | `status` | Print current state, speed, carriage position, and home confidence. |
+| `screenkeys` | Print the three production ScreenKey view models for the current state. |
 
 Supported injected fault codes are `platter-driver`, `platter-encoder`, and `carriage-stall`.
 Policies are `retryable`, `rehome`, and `power-cycle`; home handling is `keep-home` or `lose-home`.

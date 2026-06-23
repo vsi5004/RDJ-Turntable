@@ -13,6 +13,8 @@
 #include "control/mt6826s.h"
 #include "diagnostics/diagnostic_controller.hpp"
 #include "diagnostics/m2c_executor.hpp"
+#include "hmi/interaction_controller.hpp"
+#include "hmi/screenkey_demo.hpp"
 #include "hmi/screens.h"
 #include "nvm.h"
 #include "platform/debounced_button.hpp"
@@ -29,6 +31,9 @@ constexpr float kMotorVelocity33 = 33.3333f * kBeltRatio * (2.0f * kPi / 60.0f);
 constexpr uint32_t kGlobalStopHoldMs = 800;
 constexpr uint32_t kCalibrationHoldMs = 2500;
 
+#if RDJ_SCREENKEY_DEMO
+hmi::ScreenKeyDemo screenkey_demo({kOpenLoopElecVel, kMotorVelocity33});
+#else
 platform::HalClock clock_source;
 platform::BenchPlatter platter;
 platform::UnavailableCarriage carriage;
@@ -37,97 +42,69 @@ turntable::Controller turntable_controller(clock_source, platter, carriage, lift
 diagnostics::M2cExecutor m2c_executor(clock_source);
 diagnostics::Controller diagnostic_controller(m2c_executor);
 turntable::ApplicationController application(turntable_controller, diagnostic_controller);
+hmi::InteractionController key_interaction({kOpenLoopElecVel, kMotorVelocity33});
+#endif
 
 gpio::DebouncedButton key0{gpio::InputPin{KEY0_GPIO_Port, KEY0_Pin, false}};
 gpio::DebouncedButton key1{gpio::InputPin{KEY1_GPIO_Port, KEY1_Pin, false}};
 gpio::DebouncedButton key2{gpio::InputPin{KEY2_GPIO_Port, KEY2_Pin, false}};
 
-diagnostics::Command command(diagnostics::Action action, float value = 0.0f)
+hmi::Gesture gesture(gpio::ButtonEvent event)
 {
-    diagnostics::Command out;
-    out.target = diagnostics::Target::PlatterMotor;
-    out.action = action;
-    out.parameters.value = value;
-    return out;
+    if (event == gpio::ButtonEvent::Tap) return hmi::Gesture::Tap;
+    if (event == gpio::ButtonEvent::Held) return hmi::Gesture::Hold;
+    return hmi::Gesture::None;
 }
 
-bool running(diagnostics::Action action)
+#if RDJ_SCREENKEY_DEMO
+void handle_demo_keys(uint32_t now)
 {
-    const diagnostics::Snapshot snapshot = diagnostic_controller.snapshot();
-    return snapshot.state == diagnostics::State::Running && snapshot.command.action == action;
+    screenkey_demo.handle(hmi::Key::Transport,
+                          gesture(key0.update(now, kGlobalStopHoldMs)), now);
+    screenkey_demo.handle(hmi::Key::Speed,
+                          gesture(key1.update(now, kCalibrationHoldMs)), now);
+    screenkey_demo.handle(hmi::Key::Settings,
+                          gesture(key2.update(now, kGlobalStopHoldMs)), now);
+}
+#else
+void apply(const hmi::Intent& intent)
+{
+    switch (intent.type) {
+    case hmi::IntentType::None:
+        break;
+    case hmi::IntentType::TurntableEvent:
+        application.post(intent.event);
+        break;
+    case hmi::IntentType::EnterDiagnostics:
+        application.request_diagnostic_entry();
+        break;
+    case hmi::IntentType::ExitDiagnostics:
+        application.request_diagnostic_exit();
+        break;
+    case hmi::IntentType::SubmitDiagnostic:
+        application.submit_diagnostic(intent.diagnostic);
+        break;
+    case hmi::IntentType::AbortDiagnostic:
+        application.abort_diagnostic();
+        break;
+    case hmi::IntentType::AcknowledgeDiagnosticFault:
+        application.acknowledge_diagnostic_fault();
+        break;
+    }
 }
 
 void handle_keys(uint32_t now)
 {
-    const gpio::ButtonEvent play = key0.update(now, kGlobalStopHoldMs);
-    const gpio::ButtonEvent align = key1.update(now, kCalibrationHoldMs);
-    const gpio::ButtonEvent loop = key2.update(now, kGlobalStopHoldMs);
+    const gpio::ButtonEvent transport = key0.update(now, kGlobalStopHoldMs);
+    const gpio::ButtonEvent speed = key1.update(now, kCalibrationHoldMs);
+    const gpio::ButtonEvent settings = key2.update(now, kGlobalStopHoldMs);
 
-    if (application.authority() == turntable::ControlAuthority::Normal) {
-        const turntable::Snapshot snapshot = turntable_controller.snapshot();
-        if (play == gpio::ButtonEvent::Held
-            && snapshot.actions.contains(turntable::Action::Stop)) {
-            application.post(turntable::Event::simple(turntable::EventType::StopRequested));
-        } else if (play == gpio::ButtonEvent::Tap) {
-            if (snapshot.actions.contains(turntable::Action::Initialize))
-                application.post(
-                    turntable::Event::simple(turntable::EventType::InitializeRequested));
-            else if (snapshot.actions.contains(turntable::Action::Play))
-                application.post(turntable::Event::simple(turntable::EventType::PlayRequested));
-            else if (snapshot.actions.contains(turntable::Action::Pause))
-                application.post(turntable::Event::simple(turntable::EventType::PauseRequested));
-            else if (snapshot.actions.contains(turntable::Action::Resume))
-                application.post(turntable::Event::simple(turntable::EventType::ResumeRequested));
-            else if (snapshot.actions.contains(turntable::Action::AcknowledgeFault))
-                application.post(turntable::Event::simple(
-                    turntable::EventType::AcknowledgeFaultRequested));
-        }
-
-        if (align == gpio::ButtonEvent::Tap
-            && snapshot.actions.contains(turntable::Action::SelectSpeed)) {
-            const turntable::RecordSpeed next =
-                snapshot.selected_speed == turntable::RecordSpeed::Rpm33
-                ? turntable::RecordSpeed::Rpm45 : turntable::RecordSpeed::Rpm33;
-            application.post(turntable::Event::speed_change(next));
-        }
-        if (loop == gpio::ButtonEvent::Tap) TRACE("Settings UI not implemented yet.\n");
-        return;
-    }
-
-    if (diagnostic_controller.state() == diagnostics::State::Fault) {
-        if (play == gpio::ButtonEvent::Tap || play == gpio::ButtonEvent::Held) {
-            application.acknowledge_diagnostic_fault();
-            TRACE("\n>>> DIAGNOSTIC FAULT ACKNOWLEDGED\n");
-        }
-        return;
-    }
-
-    if (play == gpio::ButtonEvent::Held) {
-        application.abort_diagnostic();
-        TRACE("\n>>> DIAGNOSTIC GLOBAL STOP\n");
-    } else if (play == gpio::ButtonEvent::Tap) {
-        if (running(diagnostics::Action::OpenLoopSpin)) {
-            application.abort_diagnostic();
-        } else {
-            application.submit_diagnostic(
-                command(diagnostics::Action::OpenLoopSpin, kOpenLoopElecVel));
-        }
-    }
-
-    if (align == gpio::ButtonEvent::Held) {
-        application.submit_diagnostic(command(diagnostics::Action::EncoderAutoCal));
-    } else if (align == gpio::ButtonEvent::Tap) {
-        application.submit_diagnostic(command(diagnostics::Action::ElectricalAlign));
-    }
-
-    if (loop == gpio::ButtonEvent::Tap) {
-        if (running(diagnostics::Action::ClosedLoopVelocity)) {
-            application.abort_diagnostic();
-        } else {
-            application.submit_diagnostic(
-                command(diagnostics::Action::ClosedLoopVelocity, kMotorVelocity33));
-        }
-    }
+    turntable::ApplicationSnapshot snapshot = application.snapshot();
+    apply(key_interaction.handle(hmi::Key::Transport, gesture(transport), snapshot));
+    snapshot = application.snapshot();
+    apply(key_interaction.handle(hmi::Key::Speed, gesture(speed), snapshot));
+    snapshot = application.snapshot();
+    apply(key_interaction.handle(hmi::Key::Settings, gesture(settings), snapshot));
 }
 
 void trace_status(uint32_t now)
@@ -169,6 +146,7 @@ void trace_status(uint32_t now)
               arm_angle.parity_ok ? "OK" : "BAD");
     }
 }
+#endif
 
 }  // namespace
 
@@ -176,10 +154,21 @@ void app_init(void)
 {
     trace_init();
     led.off();
-    TRACE("\n=== RDJ-Turntable diagnostic architecture ===\n");
+    TRACE("\n=== RDJ-Turntable application ===\n");
     TRACE("SYSCLK = %u Hz\n", static_cast<unsigned>(HAL_RCC_GetSysClockFreq()));
 
     screens::init();
+#if RDJ_SCREENKEY_DEMO
+    /* GPIO initialization already holds PLAT_EN low. Reassert it and deliberately do not start
+     * TIM1 PWM, load motor calibration, or construct any actuator command path. */
+    foc::disable();
+    screenkey_demo.reset(HAL_GetTick());
+    screens::show(hmi::present(screenkey_demo.application_snapshot(),
+                               screenkey_demo.navigation_snapshot()));
+    TRACE("ScreenKey demo: actuator control is disabled.\n");
+    TRACE("KEY0 transport/hold stop, KEY1 speed/select, KEY2 settings/next.\n");
+    TRACE("Hold KEY2 on the primary view to inject a demo fault.\n");
+#else
     foc::init();
 
     nvm::Cal cal;
@@ -195,12 +184,14 @@ void app_init(void)
 #if RDJ_BOOT_DIAGNOSTICS
     application.boot_diagnostics();
 #endif
-    screens::show(hmi::present(application.snapshot()));
+    key_interaction.synchronize(application.snapshot());
+    screens::show(hmi::present(application.snapshot(), key_interaction.snapshot()));
 #if RDJ_BOOT_DIAGNOSTICS
     TRACE("Diagnostics ready: KEY0 spin, KEY1 align / hold auto-cal, KEY2 velocity.\n");
     TRACE("Hold KEY0 for global stop.\n");
 #else
     TRACE("Normal control authority ready.\n");
+#endif
 #endif
 }
 
@@ -209,15 +200,25 @@ void app_run(void)
     static uint32_t last_blink = 0;
     const uint32_t now = HAL_GetTick();
 
+#if RDJ_SCREENKEY_DEMO
+    handle_demo_keys(now);
+    screenkey_demo.tick(now);
+    screens::show(hmi::present(screenkey_demo.application_snapshot(),
+                               screenkey_demo.navigation_snapshot()));
+#else
     handle_keys(now);
     application.tick();
-    screens::show(hmi::present(application.snapshot()));
+    key_interaction.synchronize(application.snapshot());
+    screens::show(hmi::present(application.snapshot(), key_interaction.snapshot()));
+#endif
 
     if (static_cast<uint32_t>(now - last_blink) >= 250) {
         last_blink = now;
         led.toggle();
     }
 
+#if !RDJ_SCREENKEY_DEMO
     trace_status(now);
+#endif
     screens::tick();
 }

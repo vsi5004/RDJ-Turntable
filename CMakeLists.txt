@@ -15,6 +15,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(RDJ_BOOT_DIAGNOSTICS "Boot into commissioning diagnostics instead of normal operation" ON)
+option(RDJ_SCREENKEY_DEMO "Build a display/key-only demo with all actuator control disabled" OFF)
+
+if(RDJ_SCREENKEY_DEMO AND RDJ_BOOT_DIAGNOSTICS)
+    message(FATAL_ERROR "RDJ_SCREENKEY_DEMO and RDJ_BOOT_DIAGNOSTICS cannot both be enabled")
+endif()
 
 
 # Define the build type
@@ -59,6 +64,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/hmi/st7735.cpp
     App/hmi/screens.cpp
     App/hmi/presenter.cpp
+    App/hmi/interaction_controller.cpp
+    App/hmi/screenkey_demo.cpp
     # Control / encoders
     App/control/mt6826s.cpp
     App/control/as5048a.cpp
@@ -87,6 +94,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     RDJ_BOOT_DIAGNOSTICS=$<BOOL:${RDJ_BOOT_DIAGNOSTICS}>
+    RDJ_SCREENKEY_DEMO=$<BOOL:${RDJ_SCREENKEY_DEMO}>
 )
 
 # Remove wrong libob.a library dependency when using cpp files

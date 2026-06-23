@@ -77,6 +77,34 @@ Scenario commands include `initialize`, `play`, `pause`, `resume`, `stop`, `spee
 injection. The scenarios under `simulator/scenarios/` are also executed by the host test suite.
 See [simulator/README.md](simulator/README.md) for the scenario language and fault options.
 
+## Physical ScreenKey demo
+
+The `ScreenKeyDemo` firmware preset exercises the production display renderer and physical keys
+without initializing FOC or exposing an actuator command path. It reasserts `PLAT_EN` low, does not
+start TIM1 PWM, and uses a synthetic application snapshot to walk through the UI.
+
+```powershell
+cmake --preset ScreenKeyDemo
+cmake --build --preset ScreenKeyDemo
+```
+
+In VS Code, select **ScreenKey Demo (J-Link)** in the Run and Debug configuration list and press
+**F5**. The target ELF is `build/ScreenKeyDemo/RDJ-Turntable.elf`.
+
+Physical-key walkthrough:
+
+- Key 0 tap: initialize, play, pause, or resume according to the current view.
+- Key 0 hold: global Stop; from diagnostic Ready, exit diagnostics.
+- Key 1 tap: toggle RPM in the primary view; select/confirm inside Settings.
+- Key 1 hold in diagnostics: run the synthetic encoder-calibration view.
+- Key 2 tap: open Settings or advance to the next Settings item.
+- Key 2 hold on the normal primary view: inject a home-invalidating product fault.
+- Key 2 hold while diagnostics are Ready: inject a diagnostic fault.
+
+Initialization, platter acquisition, tonearm movement, stopping, and diagnostic commands advance on
+short synthetic timers. No motor, carriage, or lift command is issued. For first bench testing, keep
+actuator power disconnected as an independent physical precaution.
+
 ## Flash & debug
 
 In VS Code, press **F5** (the `Debug (J-Link)` launch config): it builds, flashes over SWD,
