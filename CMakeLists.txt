@@ -53,6 +53,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/hmi/screens.cpp
     # Control / encoders
     App/control/mt6826s.cpp
+    App/control/as5048a.cpp
     # SEGGER RTT (vendored)
     third_party/SEGGER_RTT/SEGGER_RTT.c
     third_party/SEGGER_RTT/SEGGER_RTT_printf.c

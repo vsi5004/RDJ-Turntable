@@ -9,12 +9,13 @@
 #include "trace.h"
 #include "hmi/screens.h"
 #include "control/mt6826s.h"
+#include "control/as5048a.h"
 
 void app_init(void)
 {
     trace_init();
     led.off();
-    TRACE("\n=== RDJ-Turntable M2a (MT6826S) ===\n");
+    TRACE("\n=== RDJ-Turntable M2b (MT6826S + AS5048A) ===\n");
     TRACE("SYSCLK = %u Hz\n", static_cast<unsigned>(HAL_RCC_GetSysClockFreq()));
     screens::init();
 }
@@ -38,6 +39,13 @@ void app_run(void)
               r.raw[0], r.raw[1], r.raw[2], r.raw[3],
               r.angle, static_cast<unsigned>(deg_x10 / 10), static_cast<unsigned>(deg_x10 % 10),
               r.status, r.crc_ok ? "OK" : "BAD");
+
+        as5048a::Reading a;
+        as5048a::read(a);
+        uint32_t adeg_x10 = static_cast<uint32_t>(a.angle) * 3600u / 16384u;
+        TRACE("AS5048A raw=%04X       angle=%5u  %u.%u deg  EF=%u   parity=%s\n",
+              a.raw, a.angle, static_cast<unsigned>(adeg_x10 / 10),
+              static_cast<unsigned>(adeg_x10 % 10), a.error_flag, a.parity_ok ? "OK" : "BAD");
     }
 
     screens::tick();
