@@ -101,9 +101,19 @@ Physical-key walkthrough:
 - Key 2 hold on the normal primary view: inject a home-invalidating product fault.
 - Key 2 hold while diagnostics are Ready: inject a diagnostic fault.
 
+After five seconds without a key event, the shared ScreenKey backlight smoothly fades to a readable
+dim level. Pressing any key immediately starts the faster fade back to full brightness; the same
+press still performs its normal action. PD12 is configured by CubeMX as TIM4_CH1 at 12 kHz.
+
 Initialization, platter acquisition, tonearm movement, stopping, and diagnostic commands advance on
 short synthetic timers. No motor, carriage, or lift command is issued. For first bench testing, keep
 actuator power disconnected as an independent physical precaution.
+
+While the demo platter is speed-locked, it also generates a deterministic ±0.028 RPM ripple. The
+yellow line under the RPM readout is a live centered sparkline using a fixed ±0.050 RPM vertical
+scale, so its drawing and refresh behavior can be checked on the physical ScreenKeys without an ABI
+encoder attached. Measured speed is displayed to two decimal places so the same ripple remains
+visible numerically around both 33⅓ and 45 RPM.
 
 ### HMI asset generation
 
@@ -122,6 +132,10 @@ The generator supersamples at 4×, downsamples into target-resolution coverage, 
 [docs/hmi-minimal-preview.png](docs/hmi-minimal-preview.png). Small labels remain deliberately crisp,
 while icons, large values, and curved progress elements use alpha blending into the RGB565
 framebuffer.
+
+The current icon-first layout uses 60 px primary symbols and omits persistent header labels. Each
+ScreenKey presents one large icon or value, one primary action, and at most one small line for a
+necessary gesture or live measurement.
 
 ## Flash & debug
 
@@ -166,3 +180,7 @@ The approved full-system operational model and three-ScreenKey behavior are spec
 During mechanical bring-up, development firmware boots into the diagnostic authority. The existing
 M2c platter spin, alignment, encoder calibration, and velocity-loop exercises remain available through
 the three ScreenKeys without bypassing the new single-owner control architecture.
+
+The HAL-free platter-feedback layer now also defines the future shaft-ABI timer snapshot interface,
+an M/T RPM estimator, and fixed-capacity speed-deviation history. The host simulator drives that path
+with a quantized 4000-count encoder and 84 MHz timer; no TIM2/TIM5 hardware setup is enabled yet.

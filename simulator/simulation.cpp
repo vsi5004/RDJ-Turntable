@@ -1,5 +1,6 @@
 #include "simulation.hpp"
 
+#include "control/platter_feedback.hpp"
 #include "hmi/presenter.hpp"
 #include "turntable/controller.hpp"
 
@@ -35,6 +36,9 @@ using turntable::State;
 constexpr uint32_t kStepMs = 20;
 constexpr float kParkPositionMm = 3.0f;
 constexpr float kLeadInPositionMm = 8.0f;
+constexpr uint32_t kAbiCountsPerRevolution = 4000;
+constexpr uint32_t kMeasurementTimerHz = 84000000;
+constexpr double kPi = 3.14159265358979323846;
 
 float target_rpm(RecordSpeed speed)
 {
@@ -157,13 +161,22 @@ private:
 
 class SimPlatter final : public turntable::IPlatter {
 public:
+    SimPlatter()
+        : estimator_(platter_feedback::AbiEstimatorConfig{
+              kAbiCountsPerRevolution, kMeasurementTimerHz, 32, kMeasurementTimerHz / 10u,
+              0.12f}),
+          lock_(platter_feedback::LockConfig{0.05f, 500})
+    {
+    }
+
     void start(RecordSpeed speed, uint32_t operation_id) override
     {
         target_rpm_ = target_rpm(speed);
         operation_id_ = operation_id;
         stopping_ = false;
         completion_reported_ = false;
-        lock_timing_ = false;
+        lock_.set_target(target_rpm_);
+        trace_.reset();
     }
 
     void stop(uint32_t operation_id) override
@@ -172,7 +185,7 @@ public:
         operation_id_ = operation_id;
         stopping_ = true;
         completion_reported_ = false;
-        lock_timing_ = false;
+        lock_.reset();
     }
 
     void emergency_stop() override
@@ -181,32 +194,32 @@ public:
         operation_id_ = 0;
         stopping_ = false;
         completion_reported_ = true;
-        lock_timing_ = false;
+        lock_.reset();
+        estimator_.reset();
+        trace_.reset();
     }
 
     std::optional<Event> update(uint32_t now_ms, uint32_t duration_ms)
     {
         if (!stalled_) {
-            const float rate = target_rpm_ > rpm_ ? 15.0f : 25.0f;
-            rpm_ = approach(rpm_, target_rpm_, rate * static_cast<float>(duration_ms) / 1000.0f);
+            const float rate = target_rpm_ > shaft_rpm_ ? 15.0f : 25.0f;
+            shaft_rpm_ = approach(shaft_rpm_, target_rpm_,
+                                  rate * static_cast<float>(duration_ms) / 1000.0f);
         }
 
-        if (target_rpm_ > 0.0f && std::fabs(rpm_ - target_rpm_) <= 0.05f) {
-            if (!lock_timing_) {
-                lock_timing_ = true;
-                lock_started_ms_ = now_ms;
-            }
-            if (!completion_reported_
-                && static_cast<uint32_t>(now_ms - lock_started_ms_) >= 500) {
-                completion_reported_ = true;
-                return Event::completion(EventType::PlatterSpeedLocked, operation_id_);
-            }
-        } else {
-            lock_timing_ = false;
+        update_encoder(now_ms, duration_ms);
+        const bool speed_locked = lock_.update(now_ms, measured_rpm(), estimator_.valid());
+        trace_.update(now_ms, target_rpm_, measured_rpm(), speed_locked);
+        if (target_rpm_ > 0.0f && speed_locked && !completion_reported_) {
+            completion_reported_ = true;
+            return Event::completion(EventType::PlatterSpeedLocked, operation_id_);
         }
 
-        if (stopping_ && rpm_ <= 0.01f && !completion_reported_) {
-            rpm_ = 0.0f;
+        if (stopping_ && shaft_rpm_ <= 0.01f && !completion_reported_) {
+            shaft_rpm_ = 0.0f;
+            estimator_.reset();
+            lock_.reset();
+            trace_.reset();
             completion_reported_ = true;
             return Event::completion(EventType::PlatterStopped, operation_id_);
         }
@@ -214,21 +227,71 @@ public:
     }
 
     void set_stalled(bool stalled) { stalled_ = stalled; }
-    float rpm() const { return rpm_; }
-    bool locked() const
-    {
-        return target_rpm_ > 0.0f && std::fabs(rpm_ - target_rpm_) <= 0.05f;
-    }
+    float rpm() const { return measured_rpm(); }
+    float physical_rpm() const { return shaft_rpm_; }
+    bool measurement_valid() const { return estimator_.valid(); }
+    bool locked() const { return lock_.locked(); }
+    const platter_feedback::SpeedTrace& speed_trace() const { return trace_; }
 
 private:
-    float rpm_ = 0.0f;
+    float measured_rpm() const { return estimator_.valid() ? estimator_.rpm() : 0.0f; }
+
+    void update_encoder(uint32_t now_ms, uint32_t duration_ms)
+    {
+        const uint32_t start_ms = now_ms - duration_ms;
+        const uint64_t start_ticks = static_cast<uint64_t>(start_ms) * kMeasurementTimerHz / 1000u;
+        const uint64_t duration_ticks = static_cast<uint64_t>(duration_ms)
+            * kMeasurementTimerHz / 1000u;
+
+        /* A once-per-revolution term approximates encoder eccentricity/wow; the second term gives
+         * the future sparkline something less mathematically pristine to display. */
+        const double time_seconds = static_cast<double>(now_ms) / 1000.0;
+        const double encoder_error = 0.0007 * std::sin(2.0 * kPi * revolutions_)
+            + 0.00025 * std::sin(2.0 * kPi * time_seconds / 0.73);
+        const double observed_rpm = static_cast<double>(shaft_rpm_) * (1.0 + encoder_error);
+        const double count_delta = observed_rpm * static_cast<double>(kAbiCountsPerRevolution)
+            * static_cast<double>(duration_ms) / 60000.0;
+        const double start_count = encoder_count_;
+        const double end_count = start_count + count_delta;
+
+        while (static_cast<double>(next_edge_count_) <= end_count && count_delta > 0.0) {
+            const double fraction = (static_cast<double>(next_edge_count_) - start_count)
+                / count_delta;
+            const uint64_t edge_ticks = start_ticks
+                + static_cast<uint64_t>(fraction * static_cast<double>(duration_ticks) + 0.5);
+            platter_feedback::AbiTimerSample sample;
+            sample.position_counts = static_cast<uint32_t>(next_edge_count_);
+            sample.timestamp_ticks = static_cast<uint32_t>(edge_ticks);
+            if (next_edge_count_ % kAbiCountsPerRevolution == 0) {
+                ++index_sequence_;
+                index_timestamp_ticks_ = sample.timestamp_ticks;
+            }
+            sample.index_sequence = index_sequence_;
+            sample.index_timestamp_ticks = index_timestamp_ticks_;
+            estimator_.on_sample(sample);
+            ++next_edge_count_;
+        }
+
+        encoder_count_ = end_count;
+        revolutions_ += count_delta / static_cast<double>(kAbiCountsPerRevolution);
+        const uint64_t now_ticks = static_cast<uint64_t>(now_ms) * kMeasurementTimerHz / 1000u;
+        estimator_.update(static_cast<uint32_t>(now_ticks));
+    }
+
+    float shaft_rpm_ = 0.0f;
     float target_rpm_ = 0.0f;
+    double encoder_count_ = 0.0;
+    double revolutions_ = 0.0;
+    uint64_t next_edge_count_ = 1;
+    uint32_t index_sequence_ = 0;
+    uint32_t index_timestamp_ticks_ = 0;
     uint32_t operation_id_ = 0;
-    uint32_t lock_started_ms_ = 0;
     bool stopping_ = false;
     bool stalled_ = false;
     bool completion_reported_ = false;
-    bool lock_timing_ = false;
+    platter_feedback::AbiRpmEstimator estimator_;
+    platter_feedback::SpeedLockDetector lock_;
+    platter_feedback::SpeedTrace trace_;
 };
 
 class SimCarriage final : public turntable::ITonearmCarriage {
@@ -453,6 +516,10 @@ private:
             print_screenkeys();
             return true;
         }
+        if (command == "speed-trace" && words.size() == 1) {
+            print_speed_trace();
+            return true;
+        }
         return false;
     }
 
@@ -569,8 +636,10 @@ private:
         const turntable::Snapshot snapshot = controller_.snapshot();
         output_ << timestamp() << " STATUS state=" << state_name(snapshot.state)
                 << " rpm=" << std::fixed << std::setprecision(2) << snapshot.measured_rpm
+                << " physical=" << platter_.physical_rpm()
                 << " carriage=" << snapshot.carriage_position_mm << "mm home="
-                << (snapshot.home == HomeConfidence::Valid ? "valid" : "unknown") << '\n';
+                << (snapshot.home == HomeConfidence::Valid ? "valid" : "unknown")
+                << " abi=" << (platter_.measurement_valid() ? "valid" : "stale") << '\n';
     }
 
     void print_screenkeys()
@@ -579,13 +648,27 @@ private:
         application.authority = turntable::ControlAuthority::Normal;
         application.state = turntable::ApplicationState::Normal;
         application.turntable = controller_.snapshot();
-        const hmi::View view = hmi::present(application);
+        const hmi::View view = hmi::present(application, {}, 0, &platter_.speed_trace());
         for (std::size_t index = 0; index < 3; ++index) {
             const hmi::KeyView& key = view.keys[index];
             output_ << timestamp() << " KEY" << index << ' ' << key.header << " | "
                     << key.action << " | " << key.detail
+                    << (key.speed_sparkline.count > 0
+                            ? " | RIPPLE " + std::to_string(key.speed_sparkline.count) : "")
                     << (key.enabled ? "" : " [disabled]") << '\n';
         }
+    }
+
+    void print_speed_trace()
+    {
+        const platter_feedback::SpeedTrace& trace = platter_.speed_trace();
+        output_ << timestamp() << " SPEED-TRACE samples=" << trace.size()
+                << " deviation-millirpm=";
+        for (std::size_t index = 0; index < trace.size(); ++index) {
+            if (index != 0) output_ << ',';
+            output_ << trace.deviation_millirpm(index);
+        }
+        output_ << '\n';
     }
 
     std::string timestamp() const

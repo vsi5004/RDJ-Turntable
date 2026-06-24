@@ -1,6 +1,8 @@
 #include "turntable/application_controller.hpp"
 #include "control/platter_feedback.hpp"
+#include "hmi/backlight_controller.hpp"
 #include "hmi/interaction_controller.hpp"
+#include "hmi/display_config.h"
 #include "hmi/presenter.hpp"
 #include "hmi/screenkey_demo.hpp"
 
@@ -365,6 +367,92 @@ void test_period_rpm_estimator_and_lock_detector()
     CHECK(!lock.update(1101, 33.50f, true));
 }
 
+void test_abi_timer_estimator_and_speed_trace()
+{
+    platter_feedback::AbiEstimatorConfig config;
+    config.filter_alpha = 1.0f;
+    platter_feedback::AbiRpmEstimator estimator(config);
+
+    platter_feedback::AbiTimerSample first;
+    first.position_counts = 0xfffffff0u;
+    first.timestamp_ticks = 0xfff00000u;
+    estimator.on_sample(first);
+
+    // 32 counts at 33 1/3 RPM take 14.4 ms, or 1,209,600 ticks at 84 MHz. Both
+    // the quadrature counter and timebase intentionally cross their 32-bit rollover here.
+    platter_feedback::AbiTimerSample second;
+    second.position_counts = 0x00000010u;
+    second.timestamp_ticks = first.timestamp_ticks + 1209600u;
+    estimator.on_sample(second);
+    CHECK(estimator.valid());
+    CHECK(estimator.rpm() > 33.32f && estimator.rpm() < 33.35f);
+
+    platter_feedback::AbiTimerSample index_one = second;
+    index_one.index_sequence = 1;
+    index_one.index_timestamp_ticks = 100000000u;
+    estimator.on_sample(index_one);
+    platter_feedback::AbiTimerSample index_two = index_one;
+    index_two.index_sequence = 2;
+    index_two.index_timestamp_ticks = index_one.index_timestamp_ticks + 151200000u;
+    estimator.on_sample(index_two);
+    CHECK(estimator.index_valid());
+    CHECK(estimator.index_rpm() > 33.32f && estimator.index_rpm() < 33.35f);
+
+    estimator.update(second.timestamp_ticks + config.timeout_ticks + 1u);
+    CHECK(!estimator.valid());
+
+    platter_feedback::SpeedTrace trace;
+    trace.update(0, 33.333f, 33.343f, true);
+    trace.update(50, 33.333f, 33.500f, true);
+    trace.update(100, 33.333f, 33.313f, true);
+    CHECK(trace.size() == 2);
+    CHECK(trace.deviation_millirpm(0) == 10);
+    CHECK(trace.deviation_millirpm(1) == -20);
+
+    turntable::ApplicationSnapshot snapshot;
+    snapshot.authority = turntable::ControlAuthority::Normal;
+    snapshot.state = turntable::ApplicationState::Normal;
+    snapshot.turntable.state = turntable::State::Playing;
+    snapshot.turntable.actions.add(turntable::Action::SelectSpeed);
+    const hmi::View view = hmi::present(snapshot, {}, 0, &trace);
+    CHECK(view.keys[1].speed_sparkline.count == 2);
+    CHECK(view.keys[1].speed_sparkline.samples[0] == 25);
+    CHECK(view.keys[1].speed_sparkline.samples[1] == -50);
+
+    snapshot.turntable.state = turntable::State::RaisingForPause;
+    snapshot.turntable.actions = {};
+    const hmi::View pausing = hmi::present(snapshot, {}, 0, &trace);
+    CHECK(!pausing.keys[1].enabled);
+    CHECK(pausing.keys[1].speed_sparkline.count == 2);
+}
+
+void test_backlight_inactivity_fade_and_wake()
+{
+    hmi::BacklightController backlight;
+    backlight.reset(0);
+    CHECK(backlight.duty() == 255);
+    CHECK(!backlight.tick(5000).changed);
+
+    hmi::BacklightUpdate update = backlight.tick(5010);
+    CHECK(update.changed);
+    CHECK(update.duty < 255);
+    for (uint32_t now = 5020; now <= 9000; now += 10) {
+        update = backlight.tick(now);
+        CHECK(backlight.duty() >= 45);
+    }
+    CHECK(backlight.dimmed());
+    CHECK(backlight.duty() == 45);
+
+    backlight.note_activity(9000);
+    for (uint32_t now = 9010; now <= 9400; now += 10) backlight.tick(now);
+    CHECK(!backlight.dimmed());
+    CHECK(backlight.duty() == 255);
+
+    hmi::BacklightController wrapping;
+    wrapping.reset(0xfffffff0u);
+    CHECK(!wrapping.tick(0x00000020u).changed);
+}
+
 void test_maintenance_lifecycle()
 {
     FakeClock clock;
@@ -445,8 +533,8 @@ void test_screenkey_settings_navigation_and_guards()
     blocked.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(blocked.snapshot().mode == hmi::Mode::Brightness);
     view = hmi::present(snapshot, blocked.snapshot());
-    CHECK_TEXT(view.keys[2].action, "NO PWM");
-    CHECK(!view.keys[2].enabled);
+    CHECK_TEXT(view.keys[2].action, "SMOOTH");
+    CHECK(view.keys[2].enabled);
 }
 
 void test_screenkey_transport_and_global_stop()
@@ -475,6 +563,19 @@ void test_screenkey_transport_and_global_stop()
     CHECK(playing.keys[0].icon == hmi::IconId::Pause);
     CHECK(playing.keys[0].hold_available);
     CHECK(playing.keys[0].hold_progress == 17);
+
+    turntable::ApplicationSnapshot idle = normal_snapshot(turntable::State::Idle);
+    idle.turntable.actions.add(turntable::Action::Play);
+    const hmi::View idle_view = hmi::present(idle);
+    CHECK(idle_view.keys[0].icon == hmi::IconId::Play);
+    CHECK(idle_view.keys[0].icon_color == kGreen);
+
+    turntable::ApplicationSnapshot stopping =
+        normal_snapshot(turntable::State::SpinningUpForPlay);
+    stopping.turntable.actions.add(turntable::Action::Stop);
+    const hmi::View stop_view = hmi::present(stopping);
+    CHECK(stop_view.keys[0].icon == hmi::IconId::Stop);
+    CHECK(stop_view.keys[0].icon_color == kRed);
 }
 
 void test_screenkey_fault_details_and_status_views()
@@ -510,7 +611,13 @@ void test_screenkey_fault_details_and_status_views()
     view = hmi::present(snapshot, status.snapshot());
     CHECK_TEXT(view.keys[1].action, "PLAYING");
     CHECK_TEXT(view.keys[2].action, "33 RPM");
-    CHECK_TEXT(view.keys[2].detail, "33.3 RPM");
+    CHECK_TEXT(view.keys[2].detail, "33.31 RPM");
+
+    snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm45;
+    snapshot.turntable.measured_rpm = 45.02f;
+    view = hmi::present(snapshot);
+    CHECK_TEXT(view.keys[1].action, "45 RPM");
+    CHECK_TEXT(view.keys[1].detail, "45.02 RPM");
 }
 
 void test_screenkey_diagnostic_shortcuts()
@@ -576,6 +683,9 @@ void test_screenkey_demo_walkthrough()
     demo.tick(4000);
     demo.tick(4600);
     CHECK(demo.application_snapshot().turntable.state == turntable::State::Playing);
+    const hmi::View ripple_view = hmi::present(
+        demo.application_snapshot(), demo.navigation_snapshot(), 0, &demo.speed_trace());
+    CHECK(ripple_view.keys[1].speed_sparkline.count >= 2);
 
     demo.handle(hmi::Key::Settings, hmi::Gesture::Tap, 4600);
     CHECK(demo.navigation_snapshot().mode == hmi::Mode::SettingsBrowse);
@@ -642,6 +752,8 @@ int main()
     test_diagnostic_lifecycle();
     test_application_authority_handoff();
     test_period_rpm_estimator_and_lock_detector();
+    test_abi_timer_estimator_and_speed_trace();
+    test_backlight_inactivity_fade_and_wake();
     test_maintenance_lifecycle();
     test_screenkey_settings_navigation_and_guards();
     test_screenkey_transport_and_global_stop();

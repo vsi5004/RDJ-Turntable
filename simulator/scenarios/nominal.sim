@@ -6,6 +6,7 @@ await Idle 8000
 play
 await Playing 8000
 screenkeys
+speed-trace
 pause
 await Paused 2000
 screenkeys

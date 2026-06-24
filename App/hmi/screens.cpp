@@ -80,6 +80,29 @@ void fill_rect(int x, int y, int width, int height, uint16_t color)
     }
 }
 
+void draw_line(int x0, int y0, int x1, int y1, uint16_t color)
+{
+    const int dx = x1 >= x0 ? x1 - x0 : x0 - x1;
+    const int sx = x0 < x1 ? 1 : -1;
+    const int dy = -(y1 >= y0 ? y1 - y0 : y0 - y1);
+    const int sy = y0 < y1 ? 1 : -1;
+    int error = dx + dy;
+    while (true) {
+        if (x0 >= 0 && x0 < ST7735_W && y0 >= 0 && y0 < ST7735_H)
+            fb[y0 * ST7735_W + x0] = color;
+        if (x0 == x1 && y0 == y1) break;
+        const int twice_error = 2 * error;
+        if (twice_error >= dy) {
+            error += dy;
+            x0 += sx;
+        }
+        if (twice_error <= dx) {
+            error += dx;
+            y0 += sy;
+        }
+    }
+}
+
 void draw_mask(int x, int y, const hmi::assets::Mask& mask, uint16_t color)
 {
     for (uint32_t row = 0; row < mask.height; ++row) {
@@ -164,11 +187,43 @@ void draw_hold_ring(int x, int y, uint8_t progress, uint16_t accent)
     }
 }
 
+void draw_speed_sparkline(const hmi::SpeedSparkline& sparkline, uint16_t accent)
+{
+    constexpr int kLeft = 10;
+    constexpr int kRight = ST7735_W - 11;
+    constexpr int kCenterY = 109;
+    constexpr int kAmplitude = 10;
+    fill_rect(kLeft, kCenterY, kRight - kLeft + 1, 1, kRingInactive);
+
+    if (sparkline.count < 2) {
+        fill_rect(26, kCenterY, 76, 2, accent);
+        return;
+    }
+
+    int previous_x = kLeft;
+    int previous_y = kCenterY
+        - static_cast<int>(sparkline.samples[0]) * kAmplitude / 127;
+    for (uint32_t index = 1; index < sparkline.count; ++index) {
+        const int x = kLeft + static_cast<int>(index) * (kRight - kLeft)
+            / static_cast<int>(sparkline.count - 1u);
+        const int y = kCenterY
+            - static_cast<int>(sparkline.samples[index]) * kAmplitude / 127;
+        draw_line(previous_x, previous_y, x, y, accent);
+        draw_line(previous_x, previous_y + 1, x, y + 1, accent);
+        previous_x = x;
+        previous_y = y;
+    }
+}
+
 bool same(const hmi::KeyView& first, const hmi::KeyView& second)
 {
     return first.accent == second.accent && first.enabled == second.enabled
-        && first.icon == second.icon && first.hold_progress == second.hold_progress
+        && first.icon_color == second.icon_color && first.icon == second.icon
+        && first.hold_progress == second.hold_progress
         && first.hold_available == second.hold_available
+        && first.speed_sparkline.count == second.speed_sparkline.count
+        && std::memcmp(first.speed_sparkline.samples, second.speed_sparkline.samples,
+                       sizeof(first.speed_sparkline.samples)) == 0
         && std::strcmp(first.header, second.header) == 0
         && std::strcmp(first.action, second.action) == 0
         && std::strcmp(first.detail, second.detail) == 0;
@@ -179,25 +234,35 @@ void render_key(const hmi::KeyView& view)
     fill_fb(kBackground);
     const uint16_t accent = view.enabled ? view.accent : kMuted;
     const uint16_t primary = view.enabled ? kWhite : kMuted;
-    draw_text_centered(5, view.header, hmi::FontId::Small, kMuted);
 
     if (view.icon != hmi::IconId::None) {
-        if (view.hold_available)
-            draw_hold_ring((ST7735_W - 58) / 2, 21, view.hold_progress, accent);
+        if (view.hold_available) {
+            const hmi::assets::HoldRing& ring = hmi::assets::hold_ring();
+            draw_hold_ring((ST7735_W - ring.mask.width) / 2, 2,
+                           view.hold_progress, accent);
+        }
         const hmi::assets::Mask& icon = hmi::assets::icon(view.icon);
-        draw_mask((ST7735_W - icon.width) / 2, 26, icon,
-                  view.hold_available ? primary : accent);
+        const uint16_t icon_color = view.icon_color != 0
+            ? view.icon_color : (view.hold_available ? primary : accent);
+        draw_mask((ST7735_W - icon.width) / 2, 8, icon,
+                  icon_color);
         const hmi::FontId action_font = fitting_font(view.action, hmi::FontId::Medium);
-        draw_text_centered(82, view.action, action_font, primary);
-        draw_text_centered(107, view.detail, hmi::FontId::Small,
+        draw_text_centered(76, view.action, action_font, primary);
+        draw_text_centered(104, view.detail, hmi::FontId::Small,
                            view.enabled ? accent : kMuted);
         return;
     }
 
     const hmi::FontId action_font = fitting_font(view.action, hmi::FontId::Large);
-    draw_text_centered(38, view.action, action_font, accent);
-    draw_text_centered(82, view.detail, hmi::FontId::Small, primary);
-    if (view.enabled) fill_rect(26, 105, 76, 4, accent);
+    draw_text_centered(25, view.action, action_font, accent);
+    draw_text_centered(73, view.detail, hmi::FontId::Small, primary);
+    /* Speed telemetry remains live while RPM selection is temporarily disabled during transport
+     * transitions such as raising the tonearm for pause. Interactivity and observability are
+     * intentionally independent. */
+    if (view.speed_sparkline.count >= 2)
+        draw_speed_sparkline(view.speed_sparkline, view.accent);
+    else if (view.enabled)
+        draw_speed_sparkline(view.speed_sparkline, accent);
 }
 
 }  // namespace
@@ -207,7 +272,8 @@ void init()
     const st7735::Panel* panels[NUM_SCREENS];
     for (int index = 0; index < NUM_SCREENS; ++index) panels[index] = &screens[index].panel;
 
-    st7735::backlight(false);
+    st7735::backlight_init();
+    st7735::backlight(0);
     st7735::hw_reset();
     st7735::init_all(panels, NUM_SCREENS);
 
@@ -215,8 +281,13 @@ void init()
         fill_fb(kFirstLight[index]);
         st7735::draw(screens[index].panel, fb);
     }
-    st7735::backlight(true);
+    st7735::backlight(255);
     TRACE("screens_init: %d panels up\n", NUM_SCREENS);
+}
+
+void set_brightness(uint8_t duty)
+{
+    st7735::backlight(duty);
 }
 
 void show(const hmi::View& view)

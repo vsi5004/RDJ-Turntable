@@ -13,6 +13,7 @@
 #include "control/mt6826s.h"
 #include "diagnostics/diagnostic_controller.hpp"
 #include "diagnostics/m2c_executor.hpp"
+#include "hmi/backlight_controller.hpp"
 #include "hmi/interaction_controller.hpp"
 #include "hmi/screenkey_demo.hpp"
 #include "hmi/screens.h"
@@ -30,6 +31,8 @@ constexpr float kBeltRatio = 90.0f / 24.0f;
 constexpr float kMotorVelocity33 = 33.3333f * kBeltRatio * (2.0f * kPi / 60.0f);
 constexpr uint32_t kGlobalStopHoldMs = 800;
 constexpr uint32_t kCalibrationHoldMs = 2500;
+
+hmi::BacklightController backlight_controller;
 
 #if RDJ_SCREENKEY_DEMO
 hmi::ScreenKeyDemo screenkey_demo({kOpenLoopElecVel, kMotorVelocity33});
@@ -56,15 +59,23 @@ hmi::Gesture gesture(gpio::ButtonEvent event)
     return hmi::Gesture::None;
 }
 
+void note_activity(gpio::ButtonEvent event, uint32_t now)
+{
+    if (event != gpio::ButtonEvent::None) backlight_controller.note_activity(now);
+}
+
 #if RDJ_SCREENKEY_DEMO
 void handle_demo_keys(uint32_t now)
 {
-    screenkey_demo.handle(hmi::Key::Transport,
-                          gesture(key0.update(now, kGlobalStopHoldMs)), now);
-    screenkey_demo.handle(hmi::Key::Speed,
-                          gesture(key1.update(now, kCalibrationHoldMs)), now);
-    screenkey_demo.handle(hmi::Key::Settings,
-                          gesture(key2.update(now, kGlobalStopHoldMs)), now);
+    const gpio::ButtonEvent transport = key0.update(now, kGlobalStopHoldMs);
+    const gpio::ButtonEvent speed = key1.update(now, kCalibrationHoldMs);
+    const gpio::ButtonEvent settings = key2.update(now, kGlobalStopHoldMs);
+    note_activity(transport, now);
+    note_activity(speed, now);
+    note_activity(settings, now);
+    screenkey_demo.handle(hmi::Key::Transport, gesture(transport), now);
+    screenkey_demo.handle(hmi::Key::Speed, gesture(speed), now);
+    screenkey_demo.handle(hmi::Key::Settings, gesture(settings), now);
 }
 #else
 void apply(const hmi::Intent& intent)
@@ -98,6 +109,9 @@ void handle_keys(uint32_t now)
     const gpio::ButtonEvent transport = key0.update(now, kGlobalStopHoldMs);
     const gpio::ButtonEvent speed = key1.update(now, kCalibrationHoldMs);
     const gpio::ButtonEvent settings = key2.update(now, kGlobalStopHoldMs);
+    note_activity(transport, now);
+    note_activity(speed, now);
+    note_activity(settings, now);
 
     turntable::ApplicationSnapshot snapshot = application.snapshot();
     apply(key_interaction.handle(hmi::Key::Transport, gesture(transport), snapshot));
@@ -158,13 +172,15 @@ void app_init(void)
     TRACE("SYSCLK = %u Hz\n", static_cast<unsigned>(HAL_RCC_GetSysClockFreq()));
 
     screens::init();
+    backlight_controller.reset(HAL_GetTick());
 #if RDJ_SCREENKEY_DEMO
     /* GPIO initialization already holds PLAT_EN low. Reassert it and deliberately do not start
      * TIM1 PWM, load motor calibration, or construct any actuator command path. */
     foc::disable();
     screenkey_demo.reset(HAL_GetTick());
     screens::show(hmi::present(screenkey_demo.application_snapshot(),
-                               screenkey_demo.navigation_snapshot()));
+                               screenkey_demo.navigation_snapshot(), 0,
+                               &screenkey_demo.speed_trace()));
     TRACE("ScreenKey demo: actuator control is disabled.\n");
     TRACE("KEY0 transport/hold stop, KEY1 speed/select, KEY2 settings/next.\n");
     TRACE("Hold KEY2 on the primary view to inject a demo fault.\n");
@@ -205,7 +221,8 @@ void app_run(void)
     screenkey_demo.tick(now);
     screens::show(hmi::present(screenkey_demo.application_snapshot(),
                                screenkey_demo.navigation_snapshot(),
-                               key0.hold_progress(now, kGlobalStopHoldMs)));
+                               key0.hold_progress(now, kGlobalStopHoldMs),
+                               &screenkey_demo.speed_trace()));
 #else
     handle_keys(now);
     application.tick();
@@ -213,6 +230,9 @@ void app_run(void)
     screens::show(hmi::present(application.snapshot(), key_interaction.snapshot(),
                                key0.hold_progress(now, kGlobalStopHoldMs)));
 #endif
+
+    const hmi::BacklightUpdate backlight = backlight_controller.tick(now);
+    if (backlight.changed) screens::set_brightness(backlight.duty);
 
     if (static_cast<uint32_t>(now - last_blink) >= 250) {
         last_blink = now;

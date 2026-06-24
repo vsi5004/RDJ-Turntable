@@ -7,6 +7,10 @@ the host while retaining their intended embedded timing.
 The virtual plant models:
 
 - platter acceleration, deceleration, speed lock, and stalls;
+- a 4000-count ABI encoder, 84 MHz measurement timer, index pulses, deterministic encoder
+  eccentricity/wow, and the production M/T speed estimator;
+- the production RPM ScreenKey sparkline, populated from the encoder-derived speed-error history
+  while speed is locked and cleared when the platter stops;
 - tonearm carriage homing, the outer breakbeam reference, park offset, lead-in travel, tracking, and
   stalls;
 - timed tonearm lift movement and stalls;
@@ -40,7 +44,8 @@ One command is accepted per line. Blank lines and text following `#` are ignored
 | `fault <code> <policy> <home>` | Inject a typed subsystem fault. |
 | `clear-fault`, `ack-fault` | Exercise the two-step fault recovery handshake. |
 | `status` | Print current state, speed, carriage position, and home confidence. |
-| `screenkeys` | Print the three production ScreenKey view models for the current state. |
+| `screenkeys` | Print the three production ScreenKey view models and RPM ripple sample count. |
+| `speed-trace` | Print the sampled measured-minus-target speed history in millirpm. |
 
 Supported injected fault codes are `platter-driver`, `platter-encoder`, and `carriage-stall`.
 Policies are `retryable`, `rehome`, and `power-cycle`; home handling is `keep-home` or `lose-home`.

@@ -63,6 +63,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # HMI / displays
     App/hmi/st7735.cpp
     App/hmi/screens.cpp
+    App/hmi/backlight_controller.cpp
     App/hmi/presenter.cpp
     App/hmi/interaction_controller.cpp
     App/hmi/screenkey_demo.cpp

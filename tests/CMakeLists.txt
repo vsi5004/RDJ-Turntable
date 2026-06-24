@@ -13,6 +13,7 @@ add_executable(turntable_tests
     ../App/turntable/application_controller.cpp
     ../App/diagnostics/diagnostic_controller.cpp
     ../App/control/platter_feedback.cpp
+    ../App/hmi/backlight_controller.cpp
     ../App/hmi/interaction_controller.cpp
     ../App/hmi/presenter.cpp
     ../App/hmi/screenkey_demo.cpp
@@ -22,6 +23,7 @@ add_executable(turntable_sim
     ../simulator/main.cpp
     ../simulator/simulation.cpp
     ../App/turntable/controller.cpp
+    ../App/control/platter_feedback.cpp
     ../App/hmi/presenter.cpp
 )
 

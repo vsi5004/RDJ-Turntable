@@ -532,6 +532,35 @@ The initial catalog should cover:
 Single-subsystem tests are the default. Integrated recipes explicitly claim all affected subsystems
 and remain separate from normal product behavior.
 
+### Platter ABI feedback boundary
+
+The platter shaft's 1000-PPR ABI encoder is treated as 4000 quadrature counts per revolution. Its
+low-level contract is a timestamped snapshot rather than a HAL callback:
+
+```cpp
+struct AbiTimerSample {
+    uint32_t position_counts;       // free-running quadrature count
+    uint32_t timestamp_ticks;       // free-running measurement clock
+    uint32_t index_sequence;        // increments once per revolution
+    uint32_t index_timestamp_ticks; // capture time of the latest index
+};
+```
+
+`IAbiTimerCapture` owns acquisition; `AbiRpmEstimator` consumes these snapshots using count change
+over timer change (an M/T measurement). Both counters use wrap-safe unsigned subtraction. The
+estimator, speed-lock detector, diagnostic telemetry, and fixed-capacity `SpeedTrace` therefore run
+unchanged in firmware and in the host simulator.
+
+The RPM ScreenKey maps the most recent 64 locked-speed deviations onto a centered yellow sparkline
+with a fixed ±0.050 RPM scale. The host simulator supplies encoder-derived ripple; the actuator-safe
+ScreenKey demo supplies a deterministic ±0.028 RPM waveform for physical display testing. The trace
+is cleared when the platter stops so old motion is never presented as current data.
+
+The provisional STM32 allocation reserves TIM2 encoder mode on PA0/PA1 for A/B, PA2/EXTI2 for index,
+and pinless TIM5 as the 84 MHz measurement timebase. TIM1 remains the platter FOC PWM timer and TIM8
+remains reserved for the tonearm gimbal's three PWM phases. The `.ioc` is intentionally unchanged
+until hardware integration.
+
 ### Development and production availability
 
 The Settings menu exposes **Diagnostics** only when enabled by a build option or stored service-mode
@@ -687,15 +716,20 @@ transport access is required, a fourth ScreenKey is preferable to adding more hi
 - Global Stop closes Settings immediately and returns the displays to transport progress.
 - Long-hold Key 0 also remains the global Stop/Abort override throughout diagnostic mode.
 - Settings v1 contains **System Status**, **Diagnostics**, and **Display Brightness**. Brightness is
-  shown as hardware-pending until a dimmable backlight output is selected; the UI does not pretend
-  that the current on/off backlight GPIO supports intensity control.
+  currently an informational auto-dim page: after five seconds without a key event, the shared
+  backlight fades from full duty to 45/255 over roughly three seconds. Any debounced key event wakes
+  it to full duty in roughly 0.3 seconds without consuming the key's normal tap or hold action.
 - During current platter bring-up, diagnostic mode retains the three direct platter-development
   shortcuts (spin, alignment/encoder calibration, and closed-loop velocity). The target/test browser
   remains the expansion path when additional hardware is ready.
 - In the diagnostic shortcut view, holding Key 0 aborts a running command; holding it while Ready
   exits diagnostic authority safely.
 - The exact hold duration is a configurable HMI parameter to tune during implementation; the display
-  must make hold progress visible.
+must make hold progress visible.
+
+Backlight brightness is driven by TIM4_CH1 on PD12 at 12 kHz. The inactivity and fade policy is a
+HAL-free controller; only the final 0..255 duty write belongs to the ST7735/platform layer. All time
+comparisons use wrap-safe unsigned subtraction and the cooperative fade tick never blocks.
 
 ### Physical ScreenKey demo build
 
@@ -714,3 +748,5 @@ downsampled, quantized to packed 4-bit alpha, and committed as generated C++. Ru
 integer-blends these reusable masks into the existing RGB565 framebuffer before DMA transfer. This
 keeps dynamic state, measured values, and accent colors composable without the flash cost of a full
 bitmap per screen state. Tiny text is pixel-aligned; large type, icons, and curves are antialiased.
+The physical layout is icon-first: a 60 px primary icon occupies the upper half, persistent header
+text is omitted, and a small secondary line is reserved for necessary gestures or live status.

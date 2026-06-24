@@ -33,6 +33,11 @@ bool is_playback_state(turntable::State state)
     }
 }
 
+constexpr int16_t kRippleMillirpm[] = {
+    0, 6, 13, 20, 25, 28, 26, 21, 14, 6, -2, -10, -17, -22, -25, -23,
+    -18, -10, -1, 8, 16, 22, 25, 23, 18, 11, 4, -3, -9, -12, -10, -5,
+};
+
 }  // namespace
 
 void ScreenKeyDemo::reset(uint32_t now_ms)
@@ -48,6 +53,7 @@ void ScreenKeyDemo::reset(uint32_t now_ms)
     deadline_ = Deadline::None;
     deadline_started_ms_ = now_ms;
     deadline_duration_ms_ = 0;
+    speed_trace_.reset();
     set_state(turntable::State::NeedsHome);
 }
 
@@ -71,6 +77,7 @@ void ScreenKeyDemo::handle(Key key, Gesture gesture, uint32_t now_ms)
 
 void ScreenKeyDemo::tick(uint32_t now_ms)
 {
+    update_speed_trace(now_ms);
     if (deadline_ == Deadline::None
         || static_cast<uint32_t>(now_ms - deadline_started_ms_) < deadline_duration_ms_)
         return;
@@ -129,6 +136,7 @@ void ScreenKeyDemo::apply_turntable_event(const turntable::Event& event, uint32_
         set_state(State::NeedsHome);
         break;
     case EventType::PlayRequested:
+        speed_trace_.reset();
         set_state(State::SpinningUpForPlay);
         schedule(Deadline::BeginSeeking, 1000, now_ms);
         break;
@@ -150,6 +158,7 @@ void ScreenKeyDemo::apply_turntable_event(const turntable::Event& event, uint32_
         }
         break;
     case EventType::SpeedChangeRequested:
+        speed_trace_.reset();
         application_.turntable.selected_speed = event.speed;
         if (application_.turntable.state == State::Playing) {
             set_state(State::RaisingForSpeedChange);
@@ -207,12 +216,14 @@ void ScreenKeyDemo::set_state(turntable::State state)
         break;
     case State::Idle:
     case State::NeedsHome:
+        speed_trace_.reset();
         application_.turntable.lift.position = LiftPosition::Raised;
         application_.turntable.lift.motion = MotionState::Idle;
         application_.turntable.measured_rpm = 0.0f;
         application_.turntable.speed_locked = false;
         break;
     case State::Fault:
+        speed_trace_.reset();
         application_.turntable.lift.position = LiftPosition::Raised;
         application_.turntable.lift.motion = MotionState::Idle;
         application_.turntable.measured_rpm = 0.0f;
@@ -225,6 +236,22 @@ void ScreenKeyDemo::set_state(turntable::State state)
         break;
     }
     update_actions();
+}
+
+void ScreenKeyDemo::update_speed_trace(uint32_t now_ms)
+{
+    const bool valid = application_.turntable.speed_locked
+        && application_.turntable.measured_rpm > 0.0f;
+    if (!valid) {
+        speed_trace_.update(now_ms, 0.0f, 0.0f, false);
+        return;
+    }
+
+    const float target = selected_rpm(application_.turntable.selected_speed);
+    constexpr uint32_t kRippleCount = sizeof(kRippleMillirpm) / sizeof(kRippleMillirpm[0]);
+    const int16_t ripple = kRippleMillirpm[(now_ms / 100u) % kRippleCount];
+    application_.turntable.measured_rpm = target + static_cast<float>(ripple) / 1000.0f;
+    speed_trace_.update(now_ms, target, application_.turntable.measured_rpm, true);
 }
 
 void ScreenKeyDemo::update_actions()

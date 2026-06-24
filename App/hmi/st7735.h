@@ -16,7 +16,8 @@ struct Panel {
 };
 
 void hw_reset();                               /* pulse shared RST (resets all panels) */
-void backlight(bool on);                       /* shared backlight on/off */
+void backlight_init();                         /* start shared TIM4_CH1 PWM at zero duty */
+void backlight(uint8_t duty);                  /* shared backlight, 0=off and 255=full */
 void init_all(const Panel** panels, int count);/* init all panels, sharing stabilisation delays */
 void fill(const Panel& p, uint16_t color);     /* solid fill (blocking) */
 void draw(const Panel& p, const uint16_t* fb); /* push 128x128 framebuffer via DMA */

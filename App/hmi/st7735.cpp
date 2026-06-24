@@ -8,6 +8,7 @@
 #include "st7735.h"
 #include "display_config.h"
 #include "spi.h" /* hspi3 */
+#include "tim.h" /* htim4: shared backlight PWM */
 
 namespace st7735 {
 namespace {
@@ -68,8 +69,6 @@ const uint8_t kInitCmds[] = {
 /* Shared control pins. */
 const gpio::OutputPin dc {DISP_DC_GPIO_Port,  DISP_DC_Pin};         /* on()=data, off()=command */
 const gpio::OutputPin rst{DISP_RST_GPIO_Port, DISP_RST_Pin, false}; /* reset is active-low */
-const gpio::OutputPin bl {DISP_BL_GPIO_Port,  DISP_BL_Pin};         /* assume active-high (verify) */
-
 inline void dc_command() { dc.off(); }
 inline void dc_data()    { dc.on(); }
 inline void cs_select(const Panel& p)   { p.cs.on(); }
@@ -115,7 +114,18 @@ void hw_reset()
     rst.off(); HAL_Delay(150); /* released */
 }
 
-void backlight(bool on) { bl.write(on); }
+void backlight_init()
+{
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
+    if (HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1) != HAL_OK) Error_Handler();
+}
+
+void backlight(uint8_t duty)
+{
+    const uint32_t period_counts = __HAL_TIM_GET_AUTORELOAD(&htim4) + 1u;
+    const uint32_t compare = (period_counts * duty + 127u) / 255u;
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, compare);
+}
 
 void init_all(const Panel** panels, int count)
 {

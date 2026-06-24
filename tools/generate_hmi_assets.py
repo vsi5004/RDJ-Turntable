@@ -16,8 +16,8 @@ PREVIEW_PNG = ROOT / "docs/hmi-minimal-preview.png"
 FONT_REGULAR = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 FONT_BOLD = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
 SCALE = 4
-ICON_SIZE = 48
-RING_SIZE = 58
+ICON_SIZE = 60
+RING_SIZE = 72
 RING_SEGMENTS = 32
 FIRST_CHARACTER = 32
 LAST_CHARACTER = 90
@@ -58,32 +58,32 @@ def generate_icons() -> dict[str, Image.Image]:
     icons: dict[str, Image.Image] = {}
 
     image, draw = icon_canvas()
-    draw.polygon([(16 * SCALE, 10 * SCALE), (39 * SCALE, 24 * SCALE),
-                  (16 * SCALE, 38 * SCALE)], fill=255)
+    draw.polygon([(18 * SCALE, 11 * SCALE), (49 * SCALE, 30 * SCALE),
+                  (18 * SCALE, 49 * SCALE)], fill=255)
     icons["play"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    draw.rounded_rectangle((12 * SCALE, 9 * SCALE, 20 * SCALE, 39 * SCALE),
+    draw.rounded_rectangle((14 * SCALE, 10 * SCALE, 24 * SCALE, 50 * SCALE),
                            radius=2 * SCALE, fill=255)
-    draw.rounded_rectangle((28 * SCALE, 9 * SCALE, 36 * SCALE, 39 * SCALE),
+    draw.rounded_rectangle((36 * SCALE, 10 * SCALE, 46 * SCALE, 50 * SCALE),
                            radius=2 * SCALE, fill=255)
     icons["pause"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    draw.rounded_rectangle((12 * SCALE, 12 * SCALE, 36 * SCALE, 36 * SCALE),
-                           radius=3 * SCALE, fill=255)
+    draw.rounded_rectangle((14 * SCALE, 14 * SCALE, 46 * SCALE, 46 * SCALE),
+                           radius=4 * SCALE, fill=255)
     icons["stop"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    line(draw, [(8, 23), (24, 9), (40, 23)], 4)
-    line(draw, [(13, 21), (13, 39), (35, 39), (35, 21)], 4)
-    draw.rectangle((21 * SCALE, 29 * SCALE, 27 * SCALE, 39 * SCALE), fill=255)
+    line(draw, [(7, 29), (30, 8), (53, 29)], 5)
+    line(draw, [(14, 27), (14, 51), (46, 51), (46, 27)], 5)
+    draw.rectangle((26 * SCALE, 37 * SCALE, 34 * SCALE, 51 * SCALE), fill=255)
     icons["home"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    center = 24 * SCALE
-    outer = 17 * SCALE
-    inner = 12 * SCALE
+    center = 30 * SCALE
+    outer = 23 * SCALE
+    inner = 16 * SCALE
     points = []
     for index in range(24):
         angle = -math.pi / 2 + index * math.pi / 12
@@ -91,28 +91,77 @@ def generate_icons() -> dict[str, Image.Image]:
         points.append((center + math.cos(angle) * radius,
                        center + math.sin(angle) * radius))
     draw.polygon(points, fill=255)
-    draw.ellipse((16 * SCALE, 16 * SCALE, 32 * SCALE, 32 * SCALE), fill=0)
+    draw.ellipse((20 * SCALE, 20 * SCALE, 40 * SCALE, 40 * SCALE), fill=0)
     icons["settings"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    line(draw, [(31, 10), (17, 24), (31, 38)], 5)
+    line(draw, [(40, 9), (19, 30), (40, 51)], 6)
     icons["back"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    line(draw, [(17, 10), (31, 24), (17, 38)], 5)
+    line(draw, [(20, 9), (41, 30), (20, 51)], 6)
     icons["next"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    line(draw, [(9, 25), (19, 35), (39, 13)], 5)
+    line(draw, [(8, 31), (23, 46), (52, 14)], 6)
     icons["confirm"] = downsample(image, (ICON_SIZE, ICON_SIZE))
 
     image, draw = icon_canvas()
-    draw.polygon([(24 * SCALE, 6 * SCALE), (43 * SCALE, 40 * SCALE),
-                  (5 * SCALE, 40 * SCALE)], fill=255)
-    draw.rounded_rectangle((22 * SCALE, 16 * SCALE, 26 * SCALE, 29 * SCALE),
+    draw.polygon([(30 * SCALE, 5 * SCALE), (56 * SCALE, 53 * SCALE),
+                  (4 * SCALE, 53 * SCALE)], fill=255)
+    draw.rounded_rectangle((27 * SCALE, 18 * SCALE, 33 * SCALE, 38 * SCALE),
                            radius=SCALE, fill=0)
-    draw.ellipse((22 * SCALE, 33 * SCALE, 26 * SCALE, 37 * SCALE), fill=0)
+    draw.ellipse((27 * SCALE, 43 * SCALE, 33 * SCALE, 49 * SCALE), fill=0)
     icons["warning"] = downsample(image, (ICON_SIZE, ICON_SIZE))
+
+    image, draw = icon_canvas()
+    draw.ellipse((8 * SCALE, 8 * SCALE, 52 * SCALE, 52 * SCALE),
+                 outline=255, width=5 * SCALE)
+    draw.ellipse((27 * SCALE, 17 * SCALE, 33 * SCALE, 23 * SCALE), fill=255)
+    draw.rounded_rectangle((27 * SCALE, 27 * SCALE, 33 * SCALE, 45 * SCALE),
+                           radius=2 * SCALE, fill=255)
+    icons["status"] = downsample(image, (ICON_SIZE, ICON_SIZE))
+
+    image, draw = icon_canvas()
+    line(draw, [(12, 47), (24, 35), (37, 48), (49, 36)], 6)
+    draw.ellipse((7 * SCALE, 42 * SCALE, 17 * SCALE, 52 * SCALE), fill=255)
+    draw.ellipse((44 * SCALE, 31 * SCALE, 54 * SCALE, 41 * SCALE), fill=255)
+    line(draw, [(16, 15), (44, 15)], 5)
+    line(draw, [(22, 8), (22, 23)], 4)
+    line(draw, [(38, 8), (38, 23)], 4)
+    icons["diagnostic"] = downsample(image, (ICON_SIZE, ICON_SIZE))
+
+    image, draw = icon_canvas()
+    draw.ellipse((19 * SCALE, 19 * SCALE, 41 * SCALE, 41 * SCALE), fill=255)
+    for index in range(8):
+        angle = index * math.pi / 4
+        line(draw, [(30 + math.cos(angle) * 17, 30 + math.sin(angle) * 17),
+                    (30 + math.cos(angle) * 25, 30 + math.sin(angle) * 25)], 4)
+    icons["brightness"] = downsample(image, (ICON_SIZE, ICON_SIZE))
+
+    image, draw = icon_canvas()
+    draw.ellipse((9 * SCALE, 9 * SCALE, 51 * SCALE, 51 * SCALE),
+                 outline=255, width=5 * SCALE)
+    draw.ellipse((25 * SCALE, 25 * SCALE, 35 * SCALE, 35 * SCALE), fill=255)
+    line(draw, [(42, 8), (51, 11), (49, 21)], 4)
+    icons["spin"] = downsample(image, (ICON_SIZE, ICON_SIZE))
+
+    image, draw = icon_canvas()
+    draw.ellipse((10 * SCALE, 10 * SCALE, 50 * SCALE, 50 * SCALE),
+                 outline=255, width=4 * SCALE)
+    line(draw, [(30, 4), (30, 17)], 4)
+    line(draw, [(30, 43), (30, 56)], 4)
+    line(draw, [(4, 30), (17, 30)], 4)
+    line(draw, [(43, 30), (56, 30)], 4)
+    draw.ellipse((25 * SCALE, 25 * SCALE, 35 * SCALE, 35 * SCALE), fill=255)
+    icons["encoder"] = downsample(image, (ICON_SIZE, ICON_SIZE))
+
+    image, draw = icon_canvas()
+    draw.arc((7 * SCALE, 10 * SCALE, 53 * SCALE, 56 * SCALE), 190, 350,
+             fill=255, width=5 * SCALE)
+    line(draw, [(30, 34), (46, 20)], 5)
+    draw.ellipse((25 * SCALE, 29 * SCALE, 35 * SCALE, 39 * SCALE), fill=255)
+    icons["velocity"] = downsample(image, (ICON_SIZE, ICON_SIZE))
     return icons
 
 
@@ -176,7 +225,8 @@ def generated_cpp(icons: dict[str, Image.Image]) -> str:
         "namespace {",
     ]
     icon_order = ["play", "pause", "stop", "home", "settings", "back", "next",
-                  "confirm", "warning"]
+                  "confirm", "warning", "status", "diagnostic", "brightness", "spin",
+                  "encoder", "velocity"]
     for name in icon_order:
         sections.extend([cpp_bytes(f"kIcon{name.title()}Alpha", packed_alpha(icons[name])), ""])
 
@@ -236,22 +286,17 @@ def generate_preview(icons: dict[str, Image.Image]) -> Image.Image:
     ring, _ = generate_ring()
     panels = [Image.new("RGB", (128, 128), colors["bg"]) for _ in range(3)]
 
-    centered_text(panels[0], 7, "TRANSPORT", small, colors["muted"])
-    composite_mask(panels[0], ring, (35, 22), colors["red"])
-    composite_mask(panels[0], icons["play"], (40, 27), colors["white"])
-    centered_text(panels[0], 83, "PLAY", medium, colors["white"])
-    centered_text(panels[0], 108, "HOLD STOP", small, colors["red"])
+    composite_mask(panels[0], icons["play"], ((128 - ICON_SIZE) // 2, 8), "#30d878")
+    centered_text(panels[0], 76, "PLAY", medium, colors["white"])
 
-    centered_text(panels[1], 7, "SPEED", small, colors["muted"])
-    centered_text(panels[1], 38, "33 RPM", large, colors["amber"])
-    centered_text(panels[1], 83, "33.3 ACTUAL", small, colors["white"])
-    ImageDraw.Draw(panels[1]).rounded_rectangle((26, 105, 102, 109), radius=2,
+    centered_text(panels[1], 25, "33 RPM", large, colors["amber"])
+    centered_text(panels[1], 73, "33.3 ACTUAL", small, colors["white"])
+    ImageDraw.Draw(panels[1]).rounded_rectangle((26, 100, 102, 104), radius=2,
                                                 fill=colors["amber"])
 
-    centered_text(panels[2], 7, "SYSTEM", small, colors["muted"])
-    composite_mask(panels[2], icons["settings"], (40, 25), colors["cyan"])
-    centered_text(panels[2], 83, "SETTINGS", medium, colors["white"])
-    centered_text(panels[2], 108, "HOME OK", small, colors["cyan"])
+    composite_mask(panels[2], icons["settings"], ((128 - ICON_SIZE) // 2, 7), colors["cyan"])
+    centered_text(panels[2], 76, "SETTINGS", medium, colors["white"])
+    centered_text(panels[2], 104, "HOME OK", small, colors["cyan"])
 
     preview = Image.new("RGB", (128 * 3 + 24, 128 + 16), "#202226")
     for index, panel in enumerate(panels):

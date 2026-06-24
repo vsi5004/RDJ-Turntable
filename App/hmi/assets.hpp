@@ -15,6 +15,12 @@ enum class IconId : uint8_t {
     Next,
     Confirm,
     Warning,
+    Status,
+    Diagnostic,
+    Brightness,
+    Spin,
+    Encoder,
+    Velocity,
 };
 
 enum class FontId : uint8_t { Small, Medium, Large };

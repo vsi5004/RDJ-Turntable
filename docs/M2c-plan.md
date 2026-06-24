@@ -28,7 +28,21 @@ DMA/raw poll). Align values not persisted (re-align each boot until M2c-4 EEPROM
   (ARR = 168 MHz / (2 × 20 kHz) − 1 = 4199, prescaler 0; TIM1 clk = 168 MHz on APB2).
   FOC update in the **TIM1 update ISR** (high priority).
 - **Tonearm motor (M4, later):** **TIM8** CH1/2/3 = **PC6/PC7/PC8** (overlaps unused microSD pins).
+- **Platter shaft ABI (provisional; hardware phase):** **TIM2** encoder mode with
+  **PA0/TIM2_CH1 = A** and **PA1/TIM2_CH2 = B**; **PA2/EXTI2 = index**. TIM2 is a 32-bit
+  counter, so normal polling cannot lose position to a short 16-bit rollover.
+- **ABI measurement timebase (provisional; hardware phase):** **TIM5**, free-running at its
+  84 MHz APB1 timer clock and consuming no external pin. The capture adapter will publish atomic
+  position/time snapshots and the most recent index timestamp. The precise snapshot trigger
+  (periodic, selected ABI edges, or both) remains a hardware-phase measurement decision.
 - Encoders already up: platter **MT6826S/SPI1**, tonearm **AS5048A/SPI2**.
+- **ScreenKey backlight:** **TIM4_CH1/PD12**, 12 kHz PWM (ARR=6999 at the 84 MHz APB1 timer clock).
+  This timer is independent of both motor PWM timers and the provisional ABI timers.
+
+This allocation keeps both three-phase PWM timers intact: TIM1 remains dedicated to platter FOC and
+TIM8 remains reserved for the tonearm gimbal FOC. PA0, PA1, and PA2 are unassigned in the current
+CubeMX project. These ABI assignments are reservations only; do not add TIM2, TIM5, or the GPIOs to
+the `.ioc` until the shaft encoder is ready for hardware integration.
 
 ## Bring-up order (safe → informative)
 
