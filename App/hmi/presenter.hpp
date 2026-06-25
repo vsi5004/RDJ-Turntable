@@ -33,8 +33,12 @@ struct View {
     KeyView keys[3]{};
 };
 
+/* board_temp_c sentinel for "no reading yet" (mirrors board_temp::kUnavailable). */
+constexpr int16_t kTempUnavailable = INT16_MIN;
+
 View present(const turntable::ApplicationSnapshot& snapshot,
              NavigationSnapshot navigation = {}, uint8_t transport_hold_progress = 0,
-             const platter_feedback::SpeedTrace* speed_trace = nullptr);
+             const platter_feedback::SpeedTrace* speed_trace = nullptr,
+             int16_t board_temp_c = kTempUnavailable);
 
 }  // namespace hmi

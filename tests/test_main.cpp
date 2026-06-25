@@ -612,6 +612,11 @@ void test_screenkey_fault_details_and_status_views()
     CHECK_TEXT(view.keys[1].action, "PLAYING");
     CHECK_TEXT(view.keys[2].action, "33 RPM");
     CHECK_TEXT(view.keys[2].detail, "33.31 RPM");
+    /* No reading supplied -> SYSTEM detail is just the home string. */
+    CHECK_TEXT(view.keys[1].detail, "HOME OK");
+    /* Core temperature prefixes the SYSTEM detail when a reading is present. */
+    view = hmi::present(snapshot, status.snapshot(), 0, nullptr, 42);
+    CHECK_TEXT(view.keys[1].detail, "42C HOME OK");
 
     snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm45;
     snapshot.turntable.measured_rpm = 45.02f;

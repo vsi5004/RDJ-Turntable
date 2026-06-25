@@ -272,14 +272,21 @@ View settings_view(const turntable::ApplicationSnapshot& snapshot, SettingsItem 
 }
 
 View status_view(const turntable::Snapshot& state,
-                 const platter_feedback::SpeedTrace* speed_trace)
+                 const platter_feedback::SpeedTrace* speed_trace, int16_t board_temp_c)
 {
     View view;
     const bool stop_available = state.actions.contains(turntable::Action::Stop);
     set_key(view.keys[0], "STATUS", "BACK", stop_available ? "HOLD STOP" : "", kRed, true,
             IconId::Back, stop_available);
-    set_key(view.keys[1], "SYSTEM", status_group(state.state),
-            state.home == turntable::HomeConfidence::Valid ? "HOME OK" : "NO HOME", kAmber,
+    const char* home = state.home == turntable::HomeConfidence::Valid ? "HOME OK" : "NO HOME";
+    char system_detail[20];
+    if (board_temp_c > kTempUnavailable) {
+        std::snprintf(system_detail, sizeof(system_detail), "%dC %s",
+                      static_cast<int>(board_temp_c), home);
+    } else {
+        copy_text(system_detail, home);
+    }
+    set_key(view.keys[1], "SYSTEM", status_group(state.state), system_detail, kAmber,
             true, IconId::Status);
     char rpm[20];
     measured_rpm(rpm, state.measured_rpm);
@@ -413,7 +420,7 @@ View test_browser_view(DiagTarget target, uint8_t test,
 
 View present(const turntable::ApplicationSnapshot& snapshot, NavigationSnapshot navigation,
              uint8_t transport_hold_progress,
-             const platter_feedback::SpeedTrace* speed_trace)
+             const platter_feedback::SpeedTrace* speed_trace, int16_t board_temp_c)
 {
     View view;
     if (snapshot.authority == turntable::ControlAuthority::Diagnostic) {
@@ -434,7 +441,9 @@ View present(const turntable::ApplicationSnapshot& snapshot, NavigationSnapshot 
     switch (navigation.mode) {
     case Mode::Primary: view = normal_view(snapshot, speed_trace); break;
     case Mode::SettingsBrowse: view = settings_view(snapshot, navigation.settings_item); break;
-    case Mode::SystemStatus: view = status_view(snapshot.turntable, speed_trace); break;
+    case Mode::SystemStatus:
+        view = status_view(snapshot.turntable, speed_trace, board_temp_c);
+        break;
     case Mode::DiagnosticConfirmation:
         view = diagnostic_confirmation_view(
             snapshot.turntable.actions.contains(turntable::Action::EnterDiagnostics));

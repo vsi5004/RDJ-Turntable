@@ -19,6 +19,7 @@
 #include "hmi/screenkey_demo.hpp"
 #include "hmi/screens.h"
 #include "nvm.h"
+#include "platform/board_temp.h"
 #include "platform/debounced_button.hpp"
 #include "platform/system_adapters.hpp"
 #include "trace.h"
@@ -207,6 +208,9 @@ void app_init(void)
 
     screens::init();
     backlight_controller.reset(HAL_GetTick());
+    /* Start ADC1 scan+DMA (arm angle, internal temp sensor, Vrefint). Feeds the core-temp readout
+     * on the status screen; ADC1/DMA were brought up by CubeMX before app_init(). */
+    board_temp::init();
 #if RDJ_SCREENKEY_DEMO
     /* Normal operation is simulated, but the platter motor runs for real inside diagnostics. Bring
      * up FOC (builds the LUT, starts TIM1 PWM + the control ISR) yet leave the driver DISABLED: in
@@ -222,7 +226,7 @@ void app_init(void)
     screenkey_demo.reset(HAL_GetTick());
     screens::show(hmi::present(screenkey_demo.application_snapshot(),
                                screenkey_demo.navigation_snapshot(), 0,
-                               &screenkey_demo.speed_trace()));
+                               &screenkey_demo.speed_trace(), board_temp::celsius()));
     TRACE("ScreenKey demo: normal operation simulated; diagnostics drive the real platter.\n");
     TRACE("KEY0 transport/hold stop, KEY1 speed/select, KEY2 settings/next.\n");
     TRACE("Enter diagnostics, then KEY2 spins the platter at the selected speed (33/45).\n");
@@ -239,7 +243,8 @@ void app_init(void)
     application.boot_diagnostics();
 #endif
     key_interaction.synchronize(application.snapshot());
-    screens::show(hmi::present(application.snapshot(), key_interaction.snapshot()));
+    screens::show(hmi::present(application.snapshot(), key_interaction.snapshot(), 0, nullptr,
+                               board_temp::celsius()));
 #if RDJ_BOOT_DIAGNOSTICS
     TRACE("Diagnostics ready: KEY0 spin, KEY1 align / hold auto-cal, KEY2 velocity.\n");
     TRACE("Hold KEY0 for global stop.\n");
@@ -260,13 +265,14 @@ void app_run(void)
     screens::show(hmi::present(screenkey_demo.application_snapshot(),
                                screenkey_demo.navigation_snapshot(),
                                key0.hold_progress(now, kGlobalStopHoldMs),
-                               &screenkey_demo.speed_trace()));
+                               &screenkey_demo.speed_trace(), board_temp::celsius()));
 #else
     handle_keys(now);
     application.tick();
     key_interaction.synchronize(application.snapshot());
     screens::show(hmi::present(application.snapshot(), key_interaction.snapshot(),
-                               key0.hold_progress(now, kGlobalStopHoldMs)));
+                               key0.hold_progress(now, kGlobalStopHoldMs), nullptr,
+                               board_temp::celsius()));
 #endif
 
     const hmi::BacklightUpdate backlight = backlight_controller.tick(now);

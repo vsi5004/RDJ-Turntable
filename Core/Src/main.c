@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
+#include "can.h"
 #include "dma.h"
 #include "spi.h"
 #include "tim.h"
@@ -96,6 +98,10 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
+  MX_CAN1_Init();
+  MX_TIM2_Init();
+  MX_TIM12_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   app_init();
   /* USER CODE END 2 */

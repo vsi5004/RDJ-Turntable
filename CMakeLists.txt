@@ -78,6 +78,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Platform
     App/platform/nvm.cpp
     App/platform/system_adapters.cpp
+    App/platform/board_temp.cpp
     # SEGGER RTT (vendored)
     third_party/SEGGER_RTT/SEGGER_RTT.c
     third_party/SEGGER_RTT/SEGGER_RTT_printf.c
