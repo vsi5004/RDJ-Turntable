@@ -27,7 +27,10 @@
       "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf \"calibration\" \"eeprom\")",
       "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf \"calibration\" \"eeprom\" \"autocal\")",
       "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf \"0x155\" \"Self-Calibration\" \"Program EEPROM\" \"AUTOCAL\" \"0x113\")",
-      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf --pages 2-3)"
+      "Bash(python tools/pdfsearch.py docs/datasheets/MT6826S_Rev1.1.pdf --pages 2-3)",
+      "PowerShell(cd C:\\\\dev\\\\RDJ-Turntable; docker build -t rdj-host-tests -f tests/Dockerfile tests*)",
+      "PowerShell(cd C:\\\\dev\\\\RDJ-Turntable; docker run --rm -v \"${PWD}:/src\" rdj-host-tests bash tests/run-host-tests.sh*)",
+      "PowerShell(cd C:\\\\dev\\\\RDJ-Turntable; docker run --rm -v \"${PWD}:/src\" rdj-host-tests bash tests/run-host-tests.sh 2>&1 | Select-Object -Last 9)"
     ],
     "additionalDirectories": [
       "c:\\Users\\isirc\\.claude\\projects\\c--dev-RDJ-Turntable\\memory"

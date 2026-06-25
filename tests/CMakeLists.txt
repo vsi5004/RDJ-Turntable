@@ -25,6 +25,9 @@ add_executable(turntable_sim
     ../App/turntable/controller.cpp
     ../App/control/platter_feedback.cpp
     ../App/hmi/presenter.cpp
+    # presenter renders the diagnostic test browser, whose test catalog (diag_test_count/label)
+    # lives in interaction_controller.cpp
+    ../App/hmi/interaction_controller.cpp
 )
 
 target_include_directories(turntable_tests PRIVATE ../App)

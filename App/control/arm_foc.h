@@ -23,7 +23,7 @@ namespace arm_foc {
 
 /* --- Bench-tunable configuration (mutable so we can poke them live during bring-up) --- */
 inline float    supply_voltage = 24.0f; /* VM rail; sets the duty<->volt scale */
-inline float    voltage_limit  = 1.0f;  /* Uq ceiling, V. START SMALL, ramp up once verified */
+inline float    voltage_limit  = 7.0f;  /* Uq for open-loop spin, V (raised for gimbal bring-up) */
 inline uint8_t  pole_pairs     = 7;     /* TODO confirm empirically in bring-up (OpenLoop) */
 inline float    align_voltage  = 1.5f;  /* Ud used to park the rotor during alignment */
 inline float    torque_voltage = 1.0f;  /* Uq for closed-loop torque mode (START SMALL) */
@@ -35,11 +35,16 @@ inline float    vel_ki     = 0.50f;  /* integral gain, V per (rad/s * s) */
 inline float    uq_limit   = 8.0f;   /* clamp on the loop's q-axis voltage output, V */
 inline float    vel_lpf_a  = 0.1f;   /* velocity low-pass EMA coeff; 1.0 = off */
 
-/* Position PD loop - the carriage is a SERVO (position mode), not a spindle. Uq = pos_kp*err -
- * pos_kd*velocity, clamped at uq_limit. Targets the unwrapped continuous angle, so multi-turn jogs
- * (e.g. across a lead screw) hold correctly. Tune on the bench. */
+/* Position PID loop - the carriage is a SERVO (position mode), not a spindle.
+ * Uq = pos_kp*err + pos_ki*(integral err) - pos_kd*velocity, clamped at uq_limit. The integral term
+ * is essential: it accumulates the residual error and ramps Uq until the motor breaks static
+ * friction, eliminating the steady-state error a pure PD leaves just short of target. Targets the
+ * unwrapped continuous angle, so multi-turn jogs (e.g. across a lead screw) hold correctly. Tune. */
 inline float    pos_kp        = 2.0f;   /* V per rad of position error */
-inline float    pos_kd        = 0.05f;  /* V per (rad/s) of velocity (damping) */
+inline float    pos_ki        = 25.0f;  /* V per (rad*s) of accumulated error (breaks stiction) */
+inline float    pos_kd        = 0.15f;  /* V per (rad/s) of velocity (damping the approach) */
+inline float    pos_integ_band = 0.15f; /* only integrate within this error (rad ~8.6deg) - avoids
+                                         * integral windup during the transit, which causes overshoot */
 inline float    pos_tol_rad   = 0.05f;  /* "settled" window, rad (~2.9 deg) */
 
 /* Filled by the alignment routine; consumed by closed-loop commutation. */

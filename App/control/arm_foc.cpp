@@ -49,6 +49,7 @@ float g_integ         = 0.0f;  /* velocity-loop integral term */
 int   g_vel_count     = 0;     /* sub-rate counter */
 bool  g_resync        = false; /* prime g_raw_prev on the first sample after a (re)start */
 float g_pos_target    = 0.0f;  /* commanded position, rad (Position mode) */
+float g_pos_integ     = 0.0f;  /* position-loop integral term */
 
 /* --- Sine lookup, built once in init(). 256 entries + 1 guard for linear interpolation. --- */
 constexpr int kLut = 256;
@@ -189,6 +190,8 @@ void set_target_position(float target_mech_rad)
 {
     g_pos_target = target_mech_rad;
     g_vel        = 0.0f;
+    g_integ      = 0.0f;
+    g_pos_integ  = 0.0f;
     g_pos_prev   = g_pos_cont; /* seed the velocity estimate cleanly */
     g_vel_count  = 0;
     g_resync     = true; /* prime the unwrap so the first sample does not jump g_pos_cont */
@@ -275,7 +278,17 @@ void on_update()
             g_vel += vel_lpf_a * (raw_vel - g_vel);
 
             float err = g_pos_target - g_pos_cont;
-            float u = pos_kp * err - pos_kd * g_vel;
+            /* Conditional integration: only wind up the integral within pos_integ_band of target, so
+             * it fixes terminal stiction WITHOUT saturating during the large-error transit (which
+             * would slam the motor past the target). Outside the band it holds (starts at 0). */
+            if (err < pos_integ_band && err > -pos_integ_band) {
+                g_pos_integ += err * kVelDt;
+                const float integ_max = pos_ki > 0.0f ? uq_limit / pos_ki : 0.0f;
+                if (g_pos_integ >  integ_max) g_pos_integ =  integ_max;
+                if (g_pos_integ < -integ_max) g_pos_integ = -integ_max;
+            }
+
+            float u = pos_kp * err + pos_ki * g_pos_integ - pos_kd * g_vel;
             if (u >  uq_limit) u =  uq_limit;
             if (u < -uq_limit) u = -uq_limit;
             g_uq = u;

@@ -100,17 +100,35 @@ The control software is now in the tree, mirroring the platter FOC:
   / `jog(delta)` target the unwrapped continuous angle so multi-turn jogs hold correctly. Edge-aligned
   20 kHz; `kCountToRad = 2π/16384` for the AS5048A's 14-bit count.
 
-### Carriage jog diagnostic (target browser)
+### Diagnostics: target browser → test browser
 
-Diagnostics now open on a **target browser** (per the state-machine doc): KEY1 selects the current
-target, KEY2 cycles PLATTER ↔ TONEARM, KEY0 exits; KEY0-hold on a test page backs out to the browser.
-Selecting **TONEARM** gives the carriage test page:
+Diagnostics open on a **target browser** (KEY1 select, KEY2 next target, KEY0 exit). Selecting a motor
+opens its **test browser**: **KEY2 scrolls** the test list, **KEY1 runs** the highlighted test, **KEY0
+backs out** to the target browser (KEY0-hold aborts a running test / exits). No hidden hold gestures —
+every test is an explicit list entry.
 
-| Key | Action |
+| Target | Tests (KEY2 to scroll) |
 |---|---|
-| KEY0 | **JOG −** (one fixed motor-angle step back) / STOP while moving |
-| KEY1 | **AUTO ALIGN** — electrical align; writes the commutation cal to flash (`nvm::Slot::Tonearm`, sector 6) |
-| KEY2 | **JOG +** (one step forward) / STOP while moving |
+| PLATTER | SPIN · ALIGN · AUTO-CAL · VELOCITY |
+| TONEARM | ALIGN · JOG − · JOG + · SPIN |
+
+**AUTO ALIGN** writes the commutation cal to flash (platter → `nvm::Slot::Platter` sector 7; tonearm →
+`nvm::Slot::Tonearm` sector 6). **JOG ±** moves the carriage a fixed motor angle in closed-loop
+position mode and holds. While a **JOG** runs, RTT streams the trajectory:
+`diag: jog tgt=… pos=… err=… [deci-deg] Uq=…mV vel=…mrad/s`.
+
+### Counting pole-pairs (do this first on a new motor) — automatic
+
+Closed-loop position commutates at `theta_el = pole_pairs·(theta_mech − offset)`, so a wrong
+`pole_pairs` makes the torque vector drift as the carriage moves — it jogs partway then stalls short
+and the jog reports "did not reach target". `arm_foc::pole_pairs` defaults to **7** (carried from the
+platter, unconfirmed for this motor). Run the **SPIN** test: open-loop commutation is independent of
+the encoder, so the firmware **computes pole-pairs automatically** by comparing the commanded
+electrical angle (velocity × time) to the measured mechanical angle —
+`pole_pairs = elec_travelled / mech_travelled`. It streams a converging estimate to RTT
+(`diag: <motor> pole_pairs est=N.NN …`) and shows it live on screen (`POLES=N.NN`). Set
+`arm_foc::pole_pairs` to the value, re-run **ALIGN**, then **JOG**. This works for the platter too
+(its SPIN test). Open-loop torque is `arm_foc::voltage_limit` (now **5 V** for gimbal bring-up).
 
 Jog step defaults to **90° of motor angle** (`InteractionConfig::diagnostic_jog_step_rad`, set in
 `app.cpp`) — convert to carriage mm once the lead-screw/pulley ratio is known. A jog needs a valid

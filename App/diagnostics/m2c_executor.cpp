@@ -46,6 +46,12 @@ void M2cExecutor::motor_hold_electrical_angle(float theta_el)
     else              foc::hold_electrical_angle(theta_el);
 }
 
+void M2cExecutor::motor_set_open_loop_electrical_velocity(float elec_rad_s)
+{
+    if (is_tonearm()) arm_foc::set_open_loop_electrical_velocity(elec_rad_s);
+    else              foc::set_open_loop_electrical_velocity(elec_rad_s);
+}
+
 bool M2cExecutor::motor_faulted() const
 {
     return is_tonearm() ? arm_foc::faulted() : foc::faulted();
@@ -85,10 +91,15 @@ bool M2cExecutor::start(const Command& command)
         phase_ = Phase::ReadStatus;
         return true;
     case Action::OpenLoopSpin:
-        foc::set_open_loop_electrical_velocity(
-            command.parameters.value != 0.0f ? command.parameters.value : kOpenLoopElecVel);
+        spin_elec_vel_ = command.parameters.value != 0.0f ? command.parameters.value
+                                                          : kOpenLoopElecVel;
+        motor_set_open_loop_electrical_velocity(spin_elec_vel_);
         phase_ = Phase::Continuous;
-        TRACE("diag: platter open-loop started\n");
+        trace_ms_ = clock_.now_ms();
+        spin_mech_accum_ = 0.0f;
+        spin_primed_ = false;
+        TRACE(is_tonearm() ? "diag: tonearm open-loop spin (auto pole-pair count)\n"
+                           : "diag: platter open-loop started\n");
         return true;
     case Action::ElectricalAlign:
         motor_hold_electrical_angle(0.0f);
@@ -133,6 +144,7 @@ bool M2cExecutor::start(const Command& command)
             command.parameters.value != 0.0f ? command.parameters.value : kArmJogStep;
         arm_foc::jog(delta);
         phase_ = Phase::JogSettle;
+        trace_ms_ = clock_.now_ms();
         TRACE("diag: tonearm carriage jog started\n");
         return true;
     }
@@ -180,8 +192,8 @@ ExecutionReport M2cExecutor::poll()
         if (command_.action == Action::ClosedLoopVelocity) {
             report_.primary = foc::velocity();
             report_.secondary = foc::applied_uq();
-        } else {
-            report_.primary = foc::electrical_angle();
+        } else { /* OpenLoopSpin (any motor): auto pole-pair count */
+            estimate_pole_pairs();
         }
         break;
 
@@ -291,9 +303,21 @@ ExecutionReport M2cExecutor::poll()
         }
         break;
 
-    case Phase::JogSettle:
-        report_.primary = arm_foc::position() * (180.0f / kPi);
-        report_.secondary = (arm_foc::position_target() - arm_foc::position()) * (180.0f / kPi);
+    case Phase::JogSettle: {
+        const float pos_deg = arm_foc::position() * (180.0f / kPi);
+        const float tgt_deg = arm_foc::position_target() * (180.0f / kPi);
+        report_.primary = pos_deg;
+        report_.secondary = tgt_deg - pos_deg;
+        if (static_cast<uint32_t>(clock_.now_ms() - trace_ms_) >= 100) {
+            trace_ms_ = clock_.now_ms();
+            /* All fields integer to stay clear of float printf: positions/error in deci-degrees,
+             * Uq in mV, velocity in milli-rad/s. */
+            TRACE("diag: jog tgt=%ld pos=%ld err=%ld [deci-deg] Uq=%ldmV vel=%ldmrad/s\n",
+                  static_cast<long>(tgt_deg * 10.0f), static_cast<long>(pos_deg * 10.0f),
+                  static_cast<long>((tgt_deg - pos_deg) * 10.0f),
+                  static_cast<long>(arm_foc::applied_uq() * 1000.0f),
+                  static_cast<long>(arm_foc::velocity() * 1000.0f));
+        }
         if (arm_foc::position_settled() && elapsed(kJogSettleMs)) {
             /* Target reached. Keep arm_foc in Position mode HOLDING (do not stop the motor); just
              * mark the command complete so the controller returns to Ready while the carriage holds.
@@ -307,12 +331,52 @@ ExecutionReport M2cExecutor::poll()
             TRACE("diag: tonearm jog did not reach target\n");
         }
         break;
+    }
 
     case Phase::Idle:
         break;
     }
 
     return report_;
+}
+
+void M2cExecutor::estimate_pole_pairs()
+{
+    /* Open-loop spin: the ISR drives the electrical angle but does NOT sample the encoder (true for
+     * both foc and arm_foc), so reading it here on the main loop is safe. The commanded electrical
+     * angle is exactly vel*time, and a synchronous rotor advances mech = elec / pole_pairs, so
+     * pole_pairs = elec_travelled / mech_travelled. Motor-agnostic via read_mechanical_rad(). */
+    float mech = 0.0f;
+    if (!read_mechanical_rad(mech)) return;
+
+    if (!spin_primed_) {
+        if (elapsed(500)) { /* let the rotor lock to the open-loop field before measuring */
+            spin_mech_prev_ = mech;
+            spin_mech_accum_ = 0.0f;
+            spin_accum_ms_ = clock_.now_ms();
+            spin_primed_ = true;
+        }
+        return;
+    }
+
+    float d = mech - spin_mech_prev_;
+    if (d > kPi) d -= kTwoPi;
+    if (d < -kPi) d += kTwoPi;
+    spin_mech_accum_ += d;
+    spin_mech_prev_ = mech;
+
+    const float elec =
+        spin_elec_vel_ * static_cast<float>(clock_.now_ms() - spin_accum_ms_) / 1000.0f;
+    const float mech_mag = std::fabs(spin_mech_accum_);
+    if (mech_mag <= 0.20f) return; /* wait for enough travel for a stable ratio */
+
+    report_.primary = std::fabs(elec) / mech_mag;
+    if (static_cast<uint32_t>(clock_.now_ms() - trace_ms_) < 250) return;
+    trace_ms_ = clock_.now_ms();
+    const int32_t p100 = static_cast<int32_t>(report_.primary * 100.0f);
+    TRACE("diag: %s pole_pairs est=%ld.%02ld (mech %ld deg)\n",
+          is_tonearm() ? "tonearm" : "platter", static_cast<long>(p100 / 100),
+          static_cast<long>(p100 % 100), static_cast<long>(mech_mag * 180.0f / kPi));
 }
 
 bool M2cExecutor::read_mechanical_rad(float& angle)

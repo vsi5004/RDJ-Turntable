@@ -20,9 +20,15 @@ enum class Mode : uint8_t {
 
 enum class SettingsItem : uint8_t { SystemStatus, Diagnostics, Brightness };
 
-/* Diagnostic navigation: a target browser (per docs) selects a motor, then its direct test page. */
-enum class DiagPage : uint8_t { TargetBrowser, PlatterTests, TonearmTests };
+/* Diagnostic navigation (per docs): a target browser selects a motor, then a test browser scrolls
+ * that motor's tests (align / jog / spin / ...) and runs the selected one. */
+enum class DiagPage : uint8_t { TargetBrowser, TestBrowser };
 enum class DiagTarget : uint8_t { Platter, Tonearm };
+
+/* Per-target diagnostic test list, shared by the controller (builds the command) and the presenter
+ * (renders the names). Index order is the scroll order. */
+uint8_t diag_test_count(DiagTarget target);
+const char* diag_test_label(DiagTarget target, uint8_t index);
 
 enum class IntentType : uint8_t {
     None,
@@ -52,6 +58,7 @@ struct NavigationSnapshot {
     SettingsItem settings_item = SettingsItem::SystemStatus;
     DiagPage diag_page = DiagPage::TargetBrowser;
     DiagTarget diag_target = DiagTarget::Platter;
+    uint8_t diag_test = 0; // selected test index within the current target's list
 };
 
 class InteractionController {
@@ -62,7 +69,7 @@ public:
     void synchronize(const turntable::ApplicationSnapshot& application);
     NavigationSnapshot snapshot() const
     {
-        return {mode_, settings_item_, diag_page_, diag_target_};
+        return {mode_, settings_item_, diag_page_, diag_target_, diag_test_};
     }
 
 private:
@@ -73,9 +80,9 @@ private:
     Intent handle_diagnostic(Key key, Gesture gesture, const diagnostics::Snapshot& diagnostic,
                              turntable::RecordSpeed selected_speed);
     Intent handle_target_browser(Key key, Gesture gesture);
-    Intent handle_platter_tests(Key key, Gesture gesture, const diagnostics::Snapshot& diagnostic,
-                                turntable::RecordSpeed selected_speed);
-    Intent handle_tonearm_tests(Key key, Gesture gesture, const diagnostics::Snapshot& diagnostic);
+    Intent handle_test_browser(Key key, Gesture gesture, const diagnostics::Snapshot& diagnostic,
+                               turntable::RecordSpeed selected_speed);
+    Intent run_selected_test(turntable::RecordSpeed selected_speed);
     Intent global_stop(const turntable::Snapshot& state);
     void next_settings_item();
 
@@ -84,6 +91,7 @@ private:
     SettingsItem settings_item_ = SettingsItem::SystemStatus;
     DiagPage diag_page_ = DiagPage::TargetBrowser;
     DiagTarget diag_target_ = DiagTarget::Platter;
+    uint8_t diag_test_ = 0;
 };
 
 }  // namespace hmi

@@ -634,36 +634,46 @@ void test_screenkey_diagnostic_shortcuts()
     hmi::View view = hmi::present(snapshot, interaction.snapshot());
     CHECK_TEXT(view.keys[1].action, "PLATTER");
 
-    // KEY2 cycles the target; KEY1 selects it.
+    // KEY2 cycles the target; KEY1 selects it -> that motor's test browser.
     interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
     CHECK(interaction.snapshot().diag_target == hmi::DiagTarget::Tonearm);
     interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
     CHECK(interaction.snapshot().diag_target == hmi::DiagTarget::Platter);
     interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
-    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::PlatterTests);
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TestBrowser);
+    CHECK(interaction.snapshot().diag_test == 0);
 
-    // Platter shortcuts (unchanged behavior, now scoped to the platter page).
-    hmi::Intent intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    // Platter list: SPIN(0), ALIGN(1), AUTO-CAL(2), VELOCITY(3). KEY2 scrolls, KEY1 runs.
+    view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[1].action, "SPIN");
+    hmi::Intent intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.type == hmi::IntentType::SubmitDiagnostic);
     CHECK(intent.diagnostic.target == diagnostics::Target::PlatterMotor);
     CHECK(intent.diagnostic.action == diagnostics::Action::OpenLoopSpin);
     CHECK(intent.diagnostic.parameters.value == 1.25f);
+
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot); // -> ALIGN
+    CHECK(interaction.snapshot().diag_test == 1);
     intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.diagnostic.action == diagnostics::Action::ElectricalAlign);
-    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Hold, snapshot);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot); // -> AUTO-CAL
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.diagnostic.action == diagnostics::Action::EncoderAutoCal);
-    intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot); // -> VELOCITY
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.diagnostic.action == diagnostics::Action::ClosedLoopVelocity);
     CHECK(intent.diagnostic.parameters.value == 3.5f);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot); // wraps back to SPIN
+    CHECK(interaction.snapshot().diag_test == 0);
 
-    // KEY0 hold backs out of a test page to the browser; again on the browser exits.
-    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
+    // KEY0 backs out to the target browser; again on the browser exits.
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
     CHECK(intent.type == hmi::IntentType::None);
     CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TargetBrowser);
-    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
     CHECK(intent.type == hmi::IntentType::ExitDiagnostics);
 
-    // A running command aborts on KEY0 tap (re-enter the platter page first).
+    // A running test aborts on KEY0 tap (re-enter the test browser first).
     interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     snapshot.diagnostic.state = diagnostics::State::Running;
     snapshot.diagnostic.command.action = diagnostics::Action::OpenLoopSpin;
@@ -688,37 +698,45 @@ void test_screenkey_diagnostic_tonearm_jog()
     snapshot.state = turntable::ApplicationState::Diagnostic;
     snapshot.diagnostic.state = diagnostics::State::Ready;
 
-    // Browser -> select TONEARM.
+    // Browser -> select TONEARM -> its test browser.
     interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
     CHECK(interaction.snapshot().diag_target == hmi::DiagTarget::Tonearm);
     interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
-    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TonearmTests);
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TestBrowser);
 
-    // KEY2 = jog forward, KEY0 = jog back, KEY1 = auto-align (all on the carriage).
-    hmi::Intent intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
-    CHECK(intent.type == hmi::IntentType::SubmitDiagnostic);
-    CHECK(intent.diagnostic.target == diagnostics::Target::TonearmCarriage);
-    CHECK(intent.diagnostic.action == diagnostics::Action::Jog);
-    CHECK(intent.diagnostic.parameters.value == 1.0f);
-    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
-    CHECK(intent.diagnostic.action == diagnostics::Action::Jog);
-    CHECK(intent.diagnostic.parameters.value == -1.0f);
-    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    // Tonearm list: ALIGN(0), JOG-(1), JOG+(2), SPIN(3). KEY1 runs the selected test.
+    hmi::View view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[1].action, "ALIGN");
+    hmi::Intent intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.diagnostic.target == diagnostics::Target::TonearmCarriage);
     CHECK(intent.diagnostic.action == diagnostics::Action::ElectricalAlign);
 
-    hmi::View view = hmi::present(snapshot, interaction.snapshot());
-    CHECK_TEXT(view.keys[0].action, "JOG -");
-    CHECK_TEXT(view.keys[1].action, "AUTO ALIGN");
-    CHECK_TEXT(view.keys[2].action, "JOG +");
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot); // -> JOG -
+    CHECK_TEXT(hmi::present(snapshot, interaction.snapshot()).keys[1].action, "JOG -");
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::Jog);
+    CHECK(intent.diagnostic.parameters.value == -1.0f);
 
-    // While jogging, KEY0 aborts and the key shows STOP.
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot); // -> JOG +
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::Jog);
+    CHECK(intent.diagnostic.parameters.value == 1.0f);
+
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot); // -> SPIN
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.target == diagnostics::Target::TonearmCarriage);
+    CHECK(intent.diagnostic.action == diagnostics::Action::OpenLoopSpin);
+    CHECK(intent.diagnostic.parameters.value == 1.25f);
+
+    // Running open-loop spin: KEY0 = STOP, and the running detail shows the live pole estimate.
     snapshot.diagnostic.state = diagnostics::State::Running;
-    snapshot.diagnostic.command.action = diagnostics::Action::Jog;
-    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
-    CHECK(intent.type == hmi::IntentType::AbortDiagnostic);
+    snapshot.diagnostic.command.action = diagnostics::Action::OpenLoopSpin;
+    snapshot.diagnostic.report.primary = 11.0f;
     view = hmi::present(snapshot, interaction.snapshot());
     CHECK_TEXT(view.keys[0].action, "STOP");
+    CHECK_TEXT(view.keys[1].detail, "POLES=11.00");
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.type == hmi::IntentType::AbortDiagnostic);
 }
 
 void test_screenkey_demo_walkthrough()
@@ -784,12 +802,11 @@ void test_screenkey_demo_diagnostic_shortcuts()
     CHECK(demo.application_snapshot().authority == turntable::ControlAuthority::Diagnostic);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
 
-    // Diagnostics open on the target browser; select PLATTER (default target) to reach its tests.
+    // Diagnostics open on the target browser; KEY1 selects PLATTER -> its test browser, KEY1 again
+    // runs the first test (SPIN) on the real diagnostic controller.
     demo.handle(hmi::Key::Speed, hmi::Gesture::Tap, 600);
-    CHECK(demo.navigation_snapshot().diag_page == hmi::DiagPage::PlatterTests);
-
-    // Transport tap submits the open-loop spin to the real diagnostic controller.
-    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 600);
+    CHECK(demo.navigation_snapshot().diag_page == hmi::DiagPage::TestBrowser);
+    demo.handle(hmi::Key::Speed, hmi::Gesture::Tap, 600);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Running);
     CHECK(demo.application_snapshot().diagnostic.command.action
           == diagnostics::Action::OpenLoopSpin);
@@ -800,7 +817,7 @@ void test_screenkey_demo_diagnostic_shortcuts()
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
 
     // A failed execution report surfaces as a diagnostic fault, then acknowledges back to ready.
-    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 1100);
+    demo.handle(hmi::Key::Speed, hmi::Gesture::Tap, 1100); // re-run the selected test (SPIN)
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Running);
     executor.report = {diagnostics::ExecutionState::Failed, -1};
     demo.tick(1100);
@@ -824,30 +841,34 @@ void test_screenkey_diagnostic_speed_target()
     snapshot.state = turntable::ApplicationState::Diagnostic;
     snapshot.diagnostic.state = diagnostics::State::Ready;
 
-    // Reach the platter tests through the target browser (KEY1 selects the default Platter target).
+    // Reach the platter test browser and scroll to VELOCITY (SPIN, ALIGN, AUTO-CAL, VELOCITY).
     interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
-    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::PlatterTests);
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TestBrowser);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().diag_test == 3);
 
     // The closed-loop spin target follows whichever record speed was selected.
     snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm33;
-    hmi::Intent intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    hmi::Intent intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.diagnostic.action == diagnostics::Action::ClosedLoopVelocity);
     CHECK(intent.diagnostic.parameters.value == 2.0f);
 
     snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm45;
-    intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.diagnostic.action == diagnostics::Action::ClosedLoopVelocity);
     CHECK(intent.diagnostic.parameters.value == 3.0f);
 
-    // The control key reports closed-loop vs open-loop fallback while the velocity loop runs.
+    // The running detail reports closed-loop vs open-loop fallback while the velocity loop runs.
     snapshot.diagnostic.state = diagnostics::State::Running;
     snapshot.diagnostic.command.action = diagnostics::Action::ClosedLoopVelocity;
     snapshot.diagnostic.report.platter_calibrated = true;
     hmi::View view = hmi::present(snapshot, interaction.snapshot());
-    CHECK_TEXT(view.keys[2].detail, "CLOSED LOOP");
+    CHECK_TEXT(view.keys[1].detail, "CLOSED LOOP");
     snapshot.diagnostic.report.platter_calibrated = false;
     view = hmi::present(snapshot, interaction.snapshot());
-    CHECK_TEXT(view.keys[2].detail, "OPEN: RUN CAL");
+    CHECK_TEXT(view.keys[1].detail, "OPEN: RUN CAL");
 }
 
 }  // namespace

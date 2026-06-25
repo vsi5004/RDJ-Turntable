@@ -358,56 +358,54 @@ View target_browser_view(DiagTarget target)
     return view;
 }
 
-/* Platter motor tests: spin / align+auto-cal / closed-loop velocity. */
-View platter_tests_view(const turntable::ApplicationSnapshot& snapshot)
+/* Live detail for the running test: the open-loop spin shows its auto pole-pair estimate, velocity
+ * shows the closed/open-loop state, others show their phase. */
+void running_test_detail(char (&out)[20], const diagnostics::Snapshot& state)
 {
-    const diagnostics::Snapshot& state = snapshot.diagnostic;
-    View view;
-    const bool running = state.state == diagnostics::State::Running;
-    const diagnostics::Action active = state.command.action;
-    set_key(view.keys[0], "PLATTER",
-            running && active == diagnostics::Action::OpenLoopSpin ? "STOP" : "SPIN",
-            running ? "HOLD STOP" : "HOLD BACK", kRed,
-            !running || active == diagnostics::Action::OpenLoopSpin,
-            running ? IconId::Stop : IconId::Spin, true,
-            running ? kRed : 0);
-    set_key(view.keys[1], "ENCODER",
-            running && active == diagnostics::Action::EncoderAutoCal ? "CAL RUN" : "ALIGN",
-            "HOLD CAL", kAmber,
-            !running || active == diagnostics::Action::ElectricalAlign
-                || active == diagnostics::Action::EncoderAutoCal,
-            IconId::Encoder);
-    const bool velocity_running = running && active == diagnostics::Action::ClosedLoopVelocity;
-    const char* control_detail = "READY";
-    if (velocity_running)
-        control_detail = state.report.platter_calibrated ? "CLOSED LOOP" : "OPEN: RUN CAL";
-    else if (running)
-        control_detail = "RUNNING";
-    set_key(view.keys[2], "CONTROL", velocity_running ? "STOP" : "LOOP", control_detail, kCyan,
-            !running || active == diagnostics::Action::ClosedLoopVelocity,
-            running ? IconId::Stop : IconId::Velocity);
-    return view;
+    using diagnostics::Action;
+    switch (state.command.action) {
+    case Action::OpenLoopSpin: {
+        const int32_t p100 = static_cast<int32_t>(state.report.primary * 100.0f);
+        std::snprintf(out, sizeof(out), "POLES=%ld.%02ld", static_cast<long>(p100 / 100),
+                      static_cast<long>(p100 < 0 ? -p100 % 100 : p100 % 100));
+        break;
+    }
+    case Action::ClosedLoopVelocity:
+        copy_text(out, state.report.platter_calibrated ? "CLOSED LOOP" : "OPEN: RUN CAL");
+        break;
+    case Action::ElectricalAlign: copy_text(out, "ALIGNING"); break;
+    case Action::EncoderAutoCal:  copy_text(out, "CAL RUN"); break;
+    case Action::Jog:             copy_text(out, "MOVING"); break;
+    default:                      copy_text(out, "RUNNING"); break;
+    }
 }
 
-/* Tonearm carriage tests: jog the carriage a fixed step (position mode), with auto-align that writes
- * the commutation calibration to flash. */
-View tonearm_tests_view(const turntable::ApplicationSnapshot& snapshot)
+/* A motor's test browser: scroll the test list (KEY2), run the selected test (KEY1), back (KEY0).
+ * No hidden hold gestures - every test is an explicit list entry. */
+View test_browser_view(DiagTarget target, uint8_t test,
+                       const turntable::ApplicationSnapshot& snapshot)
 {
     const diagnostics::Snapshot& state = snapshot.diagnostic;
     View view;
     const bool running = state.state == diagnostics::State::Running;
-    const diagnostics::Action active = state.command.action;
-    const bool jogging = running && active == diagnostics::Action::Jog;
-    const bool aligning = running && active == diagnostics::Action::ElectricalAlign;
-    set_key(view.keys[0], "CARRIAGE", jogging ? "STOP" : "JOG -",
-            running ? "HOLD STOP" : "HOLD BACK", kRed,
-            !running || jogging, jogging ? IconId::Stop : IconId::Back, true,
-            jogging ? kRed : 0);
-    set_key(view.keys[1], "COMMUTATE", aligning ? "ALIGNING" : "AUTO ALIGN",
-            aligning ? "PLEASE WAIT" : "WRITES FLASH", kAmber, !running, IconId::Encoder);
-    set_key(view.keys[2], "CARRIAGE", jogging ? "STOP" : "JOG +",
-            jogging ? "MOVING" : "FWD", kCyan, !running || jogging,
-            jogging ? IconId::Stop : IconId::Next);
+    const uint8_t count = diag_test_count(target);
+    const char* selected = diag_test_label(target, test);
+    const char* next = diag_test_label(target, count != 0 ? (test + 1) % count : 0);
+    const char* target_name = target == DiagTarget::Platter ? "PLATTER" : "TONEARM";
+
+    set_key(view.keys[0], target_name, running ? "STOP" : "BACK",
+            running ? "HOLD STOP" : "HOLD EXIT", kRed, true,
+            running ? IconId::Stop : IconId::Back, true, running ? kRed : 0);
+
+    if (running) {
+        char detail[20];
+        running_test_detail(detail, state);
+        set_key(view.keys[1], "RUNNING", selected, detail, kAmber, false, IconId::Spin);
+        set_key(view.keys[2], "BROWSE", "WAIT", "", kCyan, false, IconId::Next);
+        return view;
+    }
+    set_key(view.keys[1], "TEST", selected, "TAP=RUN", kAmber, true, IconId::Confirm);
+    set_key(view.keys[2], "BROWSE", "NEXT", next, kCyan, true, IconId::Next);
     return view;
 }
 
@@ -421,9 +419,12 @@ View present(const turntable::ApplicationSnapshot& snapshot, NavigationSnapshot 
     if (snapshot.authority == turntable::ControlAuthority::Diagnostic) {
         if (!diagnostic_overlay_view(snapshot, view)) {
             switch (navigation.diag_page) {
-            case DiagPage::TargetBrowser: view = target_browser_view(navigation.diag_target); break;
-            case DiagPage::PlatterTests:  view = platter_tests_view(snapshot); break;
-            case DiagPage::TonearmTests:  view = tonearm_tests_view(snapshot); break;
+            case DiagPage::TargetBrowser:
+                view = target_browser_view(navigation.diag_target);
+                break;
+            case DiagPage::TestBrowser:
+                view = test_browser_view(navigation.diag_target, navigation.diag_test, snapshot);
+                break;
             }
         }
         view.keys[0].hold_progress = view.keys[0].hold_available ? transport_hold_progress : 0;
