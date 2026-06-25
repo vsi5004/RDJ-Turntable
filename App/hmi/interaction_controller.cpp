@@ -18,11 +18,11 @@ Intent simple_intent(IntentType type)
     return intent;
 }
 
-Intent diagnostic_intent(diagnostics::Action action, float value = 0.0f)
+Intent diagnostic_intent(diagnostics::Target target, diagnostics::Action action, float value = 0.0f)
 {
     Intent intent;
     intent.type = IntentType::SubmitDiagnostic;
-    intent.diagnostic.target = diagnostics::Target::PlatterMotor;
+    intent.diagnostic.target = target;
     intent.diagnostic.action = action;
     intent.diagnostic.parameters.value = value;
     return intent;
@@ -53,6 +53,10 @@ void InteractionController::synchronize(const turntable::ApplicationSnapshot& ap
         mode_ = Mode::Primary;
         return;
     }
+    /* Outside diagnostics: keep the diagnostic browser reset so each entry starts on the target
+     * browser at the platter target. */
+    diag_page_ = DiagPage::TargetBrowser;
+    diag_target_ = DiagTarget::Platter;
     if (application.turntable.state == turntable::State::Fault
         && mode_ != Mode::FaultDetails)
         mode_ = Mode::Primary;
@@ -161,11 +165,18 @@ Intent InteractionController::handle_diagnostic(Key key, Gesture gesture,
                                                 const diagnostics::Snapshot& diagnostic,
                                                 turntable::RecordSpeed selected_speed)
 {
+    /* Transport hold is the universal navigate-up/stop: abort a running command, else back out of a
+     * test page to the target browser, else (already on the browser) exit diagnostic authority. */
     if (key == Key::Transport && gesture == Gesture::Hold) {
-        if (diagnostic.state == diagnostics::State::Ready
-            || diagnostic.state == diagnostics::State::Fault)
+        if (diagnostic.state == diagnostics::State::Running)
+            return simple_intent(IntentType::AbortDiagnostic);
+        if (diagnostic.state == diagnostics::State::Fault)
             return simple_intent(IntentType::ExitDiagnostics);
-        return simple_intent(IntentType::AbortDiagnostic);
+        if (diag_page_ != DiagPage::TargetBrowser) {
+            diag_page_ = DiagPage::TargetBrowser;
+            return {};
+        }
+        return simple_intent(IntentType::ExitDiagnostics);
     }
 
     if (gesture != Gesture::Tap && gesture != Gesture::Hold) return {};
@@ -178,32 +189,91 @@ Intent InteractionController::handle_diagnostic(Key key, Gesture gesture,
         || diagnostic.state == diagnostics::State::Inactive)
         return {};
 
+    switch (diag_page_) {
+    case DiagPage::TargetBrowser:
+        return handle_target_browser(key, gesture);
+    case DiagPage::PlatterTests:
+        return handle_platter_tests(key, gesture, diagnostic, selected_speed);
+    case DiagPage::TonearmTests:
+        return handle_tonearm_tests(key, gesture, diagnostic);
+    }
+    return {};
+}
+
+Intent InteractionController::handle_target_browser(Key key, Gesture gesture)
+{
+    if (gesture != Gesture::Tap) return {};
+    if (key == Key::Transport) return simple_intent(IntentType::ExitDiagnostics);
+    if (key == Key::Speed) { /* select the current target -> enter its test page */
+        diag_page_ = diag_target_ == DiagTarget::Platter ? DiagPage::PlatterTests
+                                                         : DiagPage::TonearmTests;
+        return {};
+    }
+    if (key == Key::Settings) /* next target */
+        diag_target_ = diag_target_ == DiagTarget::Platter ? DiagTarget::Tonearm
+                                                           : DiagTarget::Platter;
+    return {};
+}
+
+Intent InteractionController::handle_platter_tests(Key key, Gesture gesture,
+                                                   const diagnostics::Snapshot& diagnostic,
+                                                   turntable::RecordSpeed selected_speed)
+{
+    using diagnostics::Action;
+    using diagnostics::Target;
     if (key == Key::Transport && gesture == Gesture::Tap) {
-        if (diagnostic_running(diagnostic, diagnostics::Action::OpenLoopSpin))
+        if (diagnostic_running(diagnostic, Action::OpenLoopSpin))
             return simple_intent(IntentType::AbortDiagnostic);
         if (diagnostic.state == diagnostics::State::Ready)
-            return diagnostic_intent(diagnostics::Action::OpenLoopSpin,
+            return diagnostic_intent(Target::PlatterMotor, Action::OpenLoopSpin,
                                      config_.diagnostic_open_loop_velocity);
     }
 
     if (key == Key::Speed) {
         if (diagnostic.state != diagnostics::State::Ready) return {};
         if (gesture == Gesture::Hold)
-            return diagnostic_intent(diagnostics::Action::EncoderAutoCal);
-        return diagnostic_intent(diagnostics::Action::ElectricalAlign);
+            return diagnostic_intent(Target::PlatterMotor, Action::EncoderAutoCal);
+        return diagnostic_intent(Target::PlatterMotor, Action::ElectricalAlign);
     }
 
     if (key == Key::Settings && gesture == Gesture::Tap) {
-        if (diagnostic_running(diagnostic, diagnostics::Action::ClosedLoopVelocity))
+        if (diagnostic_running(diagnostic, Action::ClosedLoopVelocity))
             return simple_intent(IntentType::AbortDiagnostic);
         if (diagnostic.state == diagnostics::State::Ready) {
-            /* Spin the platter at the motor speed for whichever record speed was selected
-             * before entering diagnostics, scaled by the belt ratio. */
+            /* Spin the platter at the motor speed for whichever record speed was selected before
+             * entering diagnostics, scaled by the belt ratio. */
             const float velocity = selected_speed == turntable::RecordSpeed::Rpm45
                 ? config_.diagnostic_closed_loop_velocity_45
                 : config_.diagnostic_closed_loop_velocity;
-            return diagnostic_intent(diagnostics::Action::ClosedLoopVelocity, velocity);
+            return diagnostic_intent(Target::PlatterMotor, Action::ClosedLoopVelocity, velocity);
         }
+    }
+    return {};
+}
+
+Intent InteractionController::handle_tonearm_tests(Key key, Gesture gesture,
+                                                   const diagnostics::Snapshot& diagnostic)
+{
+    using diagnostics::Action;
+    using diagnostics::Target;
+    const bool jogging = diagnostic_running(diagnostic, Action::Jog);
+
+    /* Jog the carriage a fixed motor angle: KEY0 = back, KEY2 = forward, KEY1 = auto-align. */
+    if (key == Key::Transport && gesture == Gesture::Tap) {
+        if (jogging) return simple_intent(IntentType::AbortDiagnostic);
+        if (diagnostic.state == diagnostics::State::Ready)
+            return diagnostic_intent(Target::TonearmCarriage, Action::Jog,
+                                     -config_.diagnostic_jog_step_rad);
+    }
+    if (key == Key::Speed && gesture == Gesture::Tap) {
+        if (diagnostic.state == diagnostics::State::Ready)
+            return diagnostic_intent(Target::TonearmCarriage, Action::ElectricalAlign);
+    }
+    if (key == Key::Settings && gesture == Gesture::Tap) {
+        if (jogging) return simple_intent(IntentType::AbortDiagnostic);
+        if (diagnostic.state == diagnostics::State::Ready)
+            return diagnostic_intent(Target::TonearmCarriage, Action::Jog,
+                                     config_.diagnostic_jog_step_rad);
     }
     return {};
 }

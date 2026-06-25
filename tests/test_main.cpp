@@ -622,20 +622,32 @@ void test_screenkey_fault_details_and_status_views()
 
 void test_screenkey_diagnostic_shortcuts()
 {
-    hmi::InteractionController interaction({1.25f, 3.5f});
+    // config: open-loop, closed 33, closed 45, jog-step
+    hmi::InteractionController interaction({1.25f, 3.5f, 7.0f, 1.0f});
     turntable::ApplicationSnapshot snapshot;
     snapshot.authority = turntable::ControlAuthority::Diagnostic;
     snapshot.state = turntable::ApplicationState::Diagnostic;
     snapshot.diagnostic.state = diagnostics::State::Ready;
 
-    hmi::Intent intent =
-        interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    // Diagnostics open on the target browser.
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TargetBrowser);
+    hmi::View view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[1].action, "PLATTER");
+
+    // KEY2 cycles the target; KEY1 selects it.
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().diag_target == hmi::DiagTarget::Tonearm);
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().diag_target == hmi::DiagTarget::Platter);
+    interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::PlatterTests);
+
+    // Platter shortcuts (unchanged behavior, now scoped to the platter page).
+    hmi::Intent intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
     CHECK(intent.type == hmi::IntentType::SubmitDiagnostic);
+    CHECK(intent.diagnostic.target == diagnostics::Target::PlatterMotor);
     CHECK(intent.diagnostic.action == diagnostics::Action::OpenLoopSpin);
     CHECK(intent.diagnostic.parameters.value == 1.25f);
-
-    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
-    CHECK(intent.type == hmi::IntentType::ExitDiagnostics);
     intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     CHECK(intent.diagnostic.action == diagnostics::Action::ElectricalAlign);
     intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Hold, snapshot);
@@ -644,14 +656,21 @@ void test_screenkey_diagnostic_shortcuts()
     CHECK(intent.diagnostic.action == diagnostics::Action::ClosedLoopVelocity);
     CHECK(intent.diagnostic.parameters.value == 3.5f);
 
-    hmi::View view = hmi::present(snapshot, interaction.snapshot());
-    CHECK_TEXT(view.keys[0].detail, "HOLD EXIT");
+    // KEY0 hold backs out of a test page to the browser; again on the browser exits.
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
+    CHECK(intent.type == hmi::IntentType::None);
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TargetBrowser);
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Hold, snapshot);
+    CHECK(intent.type == hmi::IntentType::ExitDiagnostics);
 
+    // A running command aborts on KEY0 tap (re-enter the platter page first).
+    interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
     snapshot.diagnostic.state = diagnostics::State::Running;
     snapshot.diagnostic.command.action = diagnostics::Action::OpenLoopSpin;
     intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
     CHECK(intent.type == hmi::IntentType::AbortDiagnostic);
 
+    // Fault handling is page-independent.
     snapshot.diagnostic.state = diagnostics::State::Fault;
     intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
     CHECK(intent.type == hmi::IntentType::AcknowledgeDiagnosticFault);
@@ -659,6 +678,47 @@ void test_screenkey_diagnostic_shortcuts()
     CHECK(intent.type == hmi::IntentType::ExitDiagnostics);
     view = hmi::present(snapshot, interaction.snapshot());
     CHECK_TEXT(view.keys[0].action, "ACK");
+}
+
+void test_screenkey_diagnostic_tonearm_jog()
+{
+    hmi::InteractionController interaction({1.25f, 3.5f, 7.0f, 1.0f}); // jog step = 1.0
+    turntable::ApplicationSnapshot snapshot;
+    snapshot.authority = turntable::ControlAuthority::Diagnostic;
+    snapshot.state = turntable::ApplicationState::Diagnostic;
+    snapshot.diagnostic.state = diagnostics::State::Ready;
+
+    // Browser -> select TONEARM.
+    interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().diag_target == hmi::DiagTarget::Tonearm);
+    interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::TonearmTests);
+
+    // KEY2 = jog forward, KEY0 = jog back, KEY1 = auto-align (all on the carriage).
+    hmi::Intent intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.type == hmi::IntentType::SubmitDiagnostic);
+    CHECK(intent.diagnostic.target == diagnostics::Target::TonearmCarriage);
+    CHECK(intent.diagnostic.action == diagnostics::Action::Jog);
+    CHECK(intent.diagnostic.parameters.value == 1.0f);
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::Jog);
+    CHECK(intent.diagnostic.parameters.value == -1.0f);
+    intent = interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.target == diagnostics::Target::TonearmCarriage);
+    CHECK(intent.diagnostic.action == diagnostics::Action::ElectricalAlign);
+
+    hmi::View view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[0].action, "JOG -");
+    CHECK_TEXT(view.keys[1].action, "AUTO ALIGN");
+    CHECK_TEXT(view.keys[2].action, "JOG +");
+
+    // While jogging, KEY0 aborts and the key shows STOP.
+    snapshot.diagnostic.state = diagnostics::State::Running;
+    snapshot.diagnostic.command.action = diagnostics::Action::Jog;
+    intent = interaction.handle(hmi::Key::Transport, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.type == hmi::IntentType::AbortDiagnostic);
+    view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[0].action, "STOP");
 }
 
 void test_screenkey_demo_walkthrough()
@@ -724,6 +784,10 @@ void test_screenkey_demo_diagnostic_shortcuts()
     CHECK(demo.application_snapshot().authority == turntable::ControlAuthority::Diagnostic);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
 
+    // Diagnostics open on the target browser; select PLATTER (default target) to reach its tests.
+    demo.handle(hmi::Key::Speed, hmi::Gesture::Tap, 600);
+    CHECK(demo.navigation_snapshot().diag_page == hmi::DiagPage::PlatterTests);
+
     // Transport tap submits the open-loop spin to the real diagnostic controller.
     demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 600);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Running);
@@ -743,6 +807,9 @@ void test_screenkey_demo_diagnostic_shortcuts()
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Fault);
     demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 1100);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
+    // KEY0 hold backs out to the browser, then a second hold exits diagnostics.
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Hold, 1100);
+    CHECK(demo.navigation_snapshot().diag_page == hmi::DiagPage::TargetBrowser);
     demo.handle(hmi::Key::Transport, hmi::Gesture::Hold, 1100);
     demo.tick(1600);
     CHECK(demo.application_snapshot().authority == turntable::ControlAuthority::Normal);
@@ -756,6 +823,10 @@ void test_screenkey_diagnostic_speed_target()
     snapshot.authority = turntable::ControlAuthority::Diagnostic;
     snapshot.state = turntable::ApplicationState::Diagnostic;
     snapshot.diagnostic.state = diagnostics::State::Ready;
+
+    // Reach the platter tests through the target browser (KEY1 selects the default Platter target).
+    interaction.handle(hmi::Key::Speed, hmi::Gesture::Tap, snapshot);
+    CHECK(interaction.snapshot().diag_page == hmi::DiagPage::PlatterTests);
 
     // The closed-loop spin target follows whichever record speed was selected.
     snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm33;
@@ -797,6 +868,7 @@ int main()
     test_screenkey_transport_and_global_stop();
     test_screenkey_fault_details_and_status_views();
     test_screenkey_diagnostic_shortcuts();
+    test_screenkey_diagnostic_tonearm_jog();
     test_screenkey_diagnostic_speed_target();
     test_screenkey_demo_walkthrough();
     test_screenkey_demo_diagnostic_shortcuts();

@@ -73,6 +73,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/control/as5048a.cpp
     # Control / motors
     App/control/foc.cpp
+    App/control/arm_foc.cpp
     App/control/platter_feedback.cpp
     # Platform
     App/platform/nvm.cpp

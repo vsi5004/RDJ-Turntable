@@ -25,12 +25,21 @@ private:
         CalSettle,
         CalMeasure,
         CalPoll,
+        JogSettle,
     };
 
     bool read_mechanical_rad(float& angle);
     void finish(ExecutionState state, int32_t result_code = 0);
     void restore_calibration_voltage();
     bool elapsed(uint32_t duration_ms) const;
+
+    /* Per-motor dispatch by command_.target: platter (foc/MT6826S) vs tonearm (arm_foc/AS5048A).
+     * Lets the shared electrical-align state machine run for both axes. */
+    bool is_tonearm() const;
+    void motor_hold_electrical_angle(float theta_el);
+    bool motor_faulted() const;
+    bool commit_alignment(float offset, int dir);
+    void stop_motors();
 
     turntable::IClock& clock_;
     Command command_{};

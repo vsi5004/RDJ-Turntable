@@ -71,6 +71,10 @@ void Error_Handler(void);
 #define LED_GPIO_Port GPIOC
 #define MT_CS_Pin GPIO_PIN_4
 #define MT_CS_GPIO_Port GPIOA
+#define ARM_EN_Pin GPIO_PIN_4
+#define ARM_EN_GPIO_Port GPIOC
+#define ARM_FAULT_Pin GPIO_PIN_5
+#define ARM_FAULT_GPIO_Port GPIOC
 #define KEY0_Pin GPIO_PIN_8
 #define KEY0_GPIO_Port GPIOE
 #define KEY1_Pin GPIO_PIN_9

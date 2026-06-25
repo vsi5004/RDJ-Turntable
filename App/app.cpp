@@ -8,6 +8,7 @@
 #include "app.h"
 
 #include "board.h"
+#include "control/arm_foc.h"
 #include "control/as5048a.h"
 #include "control/foc.h"
 #include "control/mt6826s.h"
@@ -30,8 +31,9 @@ constexpr float kOpenLoopElecVel = 2.0f * kPi;
 constexpr float kBeltRatio = 90.0f / 24.0f;
 constexpr float kMotorVelocity33 = 33.3333f * kBeltRatio * (2.0f * kPi / 60.0f);
 constexpr float kMotorVelocity45 = 45.0f * kBeltRatio * (2.0f * kPi / 60.0f);
+constexpr float kArmJogStep = kPi / 2.0f; /* tonearm carriage jog: 90 deg of motor angle per press */
 constexpr hmi::InteractionConfig kInteractionConfig{
-    kOpenLoopElecVel, kMotorVelocity33, kMotorVelocity45};
+    kOpenLoopElecVel, kMotorVelocity33, kMotorVelocity45, kArmJogStep};
 constexpr uint32_t kGlobalStopHoldMs = 800;
 constexpr uint32_t kCalibrationHoldMs = 2500;
 
@@ -73,18 +75,27 @@ void note_activity(gpio::ButtonEvent event, uint32_t now)
     if (event != gpio::ButtonEvent::None) backlight_controller.note_activity(now);
 }
 
-void load_platter_alignment()
+/* Load one motor's stored alignment from flash into its FOC module's fields. Reused for both the
+ * platter (foc) and the tonearm gimbal (arm_foc); the inline FOC config vars bind directly. */
+void load_alignment(nvm::Slot slot, float& offset, int8_t& dir, bool& valid, const char* name)
 {
     nvm::Cal cal;
-    if (nvm::load(cal)) {
-        foc::zero_elec_offset = cal.zero_offset;
-        foc::direction = static_cast<int8_t>(cal.direction);
-        foc::alignment_valid = true;
-        TRACE("Loaded platter alignment: dir=%c\n", cal.direction > 0 ? '+' : '-');
+    if (nvm::load(slot, cal)) {
+        offset = cal.zero_offset;
+        dir = static_cast<int8_t>(cal.direction);
+        valid = true;
+        TRACE("Loaded %s alignment: dir=%c\n", name, cal.direction > 0 ? '+' : '-');
     } else {
-        TRACE("No stored platter alignment; closed-loop velocity falls back to open-loop.\n");
-        TRACE("Run KEY1 align (hold for auto-cal) in diagnostics to enable closed-loop.\n");
+        TRACE("No stored %s alignment; run align in diagnostics to enable closed-loop.\n", name);
     }
+}
+
+void load_alignments()
+{
+    load_alignment(nvm::Slot::Platter, foc::zero_elec_offset, foc::direction,
+                   foc::alignment_valid, "platter");
+    load_alignment(nvm::Slot::Tonearm, arm_foc::zero_elec_offset, arm_foc::direction,
+                   arm_foc::alignment_valid, "tonearm");
 }
 
 #if RDJ_SCREENKEY_DEMO
@@ -202,8 +213,12 @@ void app_init(void)
      * Idle mode the ISR commands nothing and PLAT_EN stays low, so the motor only spins once a
      * diagnostic command (KEY2 loop / KEY0 spin / KEY1 align-cal) is issued. */
     foc::init();
-    load_platter_alignment();
+    /* Bring up the tonearm gimbal driver too (TIM3 PWM + control ISR), left DISABLED. The AS5048A
+     * closes this loop; the carriage jog diagnostic commands it. */
+    arm_foc::init();
+    load_alignments();
     foc::stop();
+    arm_foc::stop();
     screenkey_demo.reset(HAL_GetTick());
     screens::show(hmi::present(screenkey_demo.application_snapshot(),
                                screenkey_demo.navigation_snapshot(), 0,
@@ -214,7 +229,11 @@ void app_init(void)
     TRACE("Hold KEY2 on the primary view to inject a demo fault.\n");
 #else
     foc::init();
-    load_platter_alignment();
+    /* Tonearm gimbal driver: TIM3 PWM + control ISR up, driver DISABLED (ARM_EN low). Closed by the
+     * AS5048A; exercised by the carriage jog diagnostic. */
+    arm_foc::init();
+    load_alignments();
+    arm_foc::stop();
 
 #if RDJ_BOOT_DIAGNOSTICS
     application.boot_diagnostics();

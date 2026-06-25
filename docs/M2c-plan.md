@@ -27,7 +27,13 @@ DMA/raw poll). Align values not persisted (re-align each boot until M2c-4 EEPROM
   GPIO + (optional) **nFAULT** input GPIO. Center-aligned PWM, **~20 kHz**
   (ARR = 168 MHz / (2 × 20 kHz) − 1 = 4199, prescaler 0; TIM1 clk = 168 MHz on APB2).
   FOC update in the **TIM1 update ISR** (high priority).
-- **Tonearm motor (M4, later):** **TIM8** CH1/2/3 = **PC6/PC7/PC8** (overlaps unused microSD pins).
+- **Tonearm gimbal motor (added; see M4-cubemx-setup.md):** **TIM3** CH1/2/3 = **PC6/PC7/PB0**,
+  edge-aligned **~20 kHz** (ARR = 84 MHz / 20 kHz − 1 = 4199, prescaler 0; TIM3 clk = 84 MHz on
+  APB1) + **ARM_EN** = PC4 and **ARM_FAULT** = PC5. Closed by the **AS5048A/SPI2**. *Not* TIM8/PC8:
+  PC8 = SDIO_D0, and we keep the microSD bank (PC8-12, PD2) free for future logging. PC6/PC7 are
+  SDIO_D6/D7, which a microSD (1/4-bit) never uses, so they stay available. TIM3 is a GP timer (no
+  RCR/complementary/break), but the SimpleFOC Mini/DRV8313 uses none of those — 3 single PWMs,
+  edge-aligned, same 4200-count duty resolution as TIM1 — so there is no FOC penalty here.
 - **Platter shaft ABI (provisional; hardware phase):** **TIM2** encoder mode with
   **PA0/TIM2_CH1 = A** and **PA1/TIM2_CH2 = B**; **PA2/EXTI2 = index**. TIM2 is a 32-bit
   counter, so normal polling cannot lose position to a short 16-bit rollover.
@@ -39,10 +45,12 @@ DMA/raw poll). Align values not persisted (re-align each boot until M2c-4 EEPROM
 - **ScreenKey backlight:** **TIM4_CH1/PD12**, 12 kHz PWM (ARR=6999 at the 84 MHz APB1 timer clock).
   This timer is independent of both motor PWM timers and the provisional ABI timers.
 
-This allocation keeps both three-phase PWM timers intact: TIM1 remains dedicated to platter FOC and
-TIM8 remains reserved for the tonearm gimbal FOC. PA0, PA1, and PA2 are unassigned in the current
-CubeMX project. These ABI assignments are reservations only; do not add TIM2, TIM5, or the GPIOs to
-the `.ioc` until the shaft encoder is ready for hardware integration.
+TIM1 remains dedicated to platter FOC and TIM3 now drives the tonearm gimbal FOC (PC6/PC7/PB0).
+PA0, PA1, and PA2 remain unassigned in the CubeMX project and are still reserved for the platter ABI
+encoder (TIM2 A/B + index, with TIM5 as the timebase). These ABI assignments are reservations only;
+do not add TIM2, TIM5, or the GPIOs to the `.ioc` until the shaft encoder is ready for hardware
+integration. The gimbal-motor pins were chosen specifically to avoid the microSD bank so that path
+stays open.
 
 ## Bring-up order (safe → informative)
 

@@ -323,18 +323,16 @@ View fault_details_view(const turntable::Snapshot& state)
     return view;
 }
 
-View diagnostic_view(const turntable::ApplicationSnapshot& snapshot)
+/* Fault / stopping screens are generic across every diagnostic page. Returns true (and fills view)
+ * when one applies. */
+bool diagnostic_overlay_view(const turntable::ApplicationSnapshot& snapshot, View& view)
 {
     const diagnostics::Snapshot& state = snapshot.diagnostic;
-    View view;
     if (state.state == diagnostics::State::Fault) {
-        set_key(view.keys[0], "DIAGNOSTIC", "ACK", "HOLD EXIT", kRed, true,
-                IconId::Warning, true);
-        set_key(view.keys[1], "COMMAND", "FAULT", "OUTPUTS SAFE", kAmber, false,
-                IconId::Warning);
-        set_key(view.keys[2], "CONTROL", "FAULT", "OUTPUTS SAFE", kCyan, false,
-                IconId::Warning);
-        return view;
+        set_key(view.keys[0], "DIAGNOSTIC", "ACK", "HOLD EXIT", kRed, true, IconId::Warning, true);
+        set_key(view.keys[1], "COMMAND", "FAULT", "OUTPUTS SAFE", kAmber, false, IconId::Warning);
+        set_key(view.keys[2], "CONTROL", "FAULT", "OUTPUTS SAFE", kCyan, false, IconId::Warning);
+        return true;
     }
     if (state.state == diagnostics::State::Stopping
         || snapshot.state == turntable::ApplicationState::ExitingDiagnostic) {
@@ -344,14 +342,32 @@ View diagnostic_view(const turntable::ApplicationSnapshot& snapshot)
                 IconId::Stop, false, kRed);
         set_key(view.keys[2], "CONTROL", "STOPPING", "PLEASE WAIT", kCyan, false,
                 IconId::Stop, false, kRed);
-        return view;
+        return true;
     }
+    return false;
+}
 
+/* Diagnostic entry: pick which motor to test (Key1 select, Key2 next, Key0 exit). */
+View target_browser_view(DiagTarget target)
+{
+    View view;
+    set_key(view.keys[0], "DIAGNOSTIC", "EXIT", "HOLD EXIT", kRed, true, IconId::Back, true);
+    set_key(view.keys[1], "TARGET", target == DiagTarget::Platter ? "PLATTER" : "TONEARM",
+            "SELECT", kAmber, true, IconId::Diagnostic);
+    set_key(view.keys[2], "BROWSE", "NEXT", "TAP", kCyan, true, IconId::Next);
+    return view;
+}
+
+/* Platter motor tests: spin / align+auto-cal / closed-loop velocity. */
+View platter_tests_view(const turntable::ApplicationSnapshot& snapshot)
+{
+    const diagnostics::Snapshot& state = snapshot.diagnostic;
+    View view;
     const bool running = state.state == diagnostics::State::Running;
     const diagnostics::Action active = state.command.action;
     set_key(view.keys[0], "PLATTER",
             running && active == diagnostics::Action::OpenLoopSpin ? "STOP" : "SPIN",
-            running ? "HOLD STOP" : "HOLD EXIT", kRed,
+            running ? "HOLD STOP" : "HOLD BACK", kRed,
             !running || active == diagnostics::Action::OpenLoopSpin,
             running ? IconId::Stop : IconId::Spin, true,
             running ? kRed : 0);
@@ -361,8 +377,7 @@ View diagnostic_view(const turntable::ApplicationSnapshot& snapshot)
             !running || active == diagnostics::Action::ElectricalAlign
                 || active == diagnostics::Action::EncoderAutoCal,
             IconId::Encoder);
-    const bool velocity_running =
-        running && active == diagnostics::Action::ClosedLoopVelocity;
+    const bool velocity_running = running && active == diagnostics::Action::ClosedLoopVelocity;
     const char* control_detail = "READY";
     if (velocity_running)
         control_detail = state.report.platter_calibrated ? "CLOSED LOOP" : "OPEN: RUN CAL";
@@ -374,6 +389,28 @@ View diagnostic_view(const turntable::ApplicationSnapshot& snapshot)
     return view;
 }
 
+/* Tonearm carriage tests: jog the carriage a fixed step (position mode), with auto-align that writes
+ * the commutation calibration to flash. */
+View tonearm_tests_view(const turntable::ApplicationSnapshot& snapshot)
+{
+    const diagnostics::Snapshot& state = snapshot.diagnostic;
+    View view;
+    const bool running = state.state == diagnostics::State::Running;
+    const diagnostics::Action active = state.command.action;
+    const bool jogging = running && active == diagnostics::Action::Jog;
+    const bool aligning = running && active == diagnostics::Action::ElectricalAlign;
+    set_key(view.keys[0], "CARRIAGE", jogging ? "STOP" : "JOG -",
+            running ? "HOLD STOP" : "HOLD BACK", kRed,
+            !running || jogging, jogging ? IconId::Stop : IconId::Back, true,
+            jogging ? kRed : 0);
+    set_key(view.keys[1], "COMMUTATE", aligning ? "ALIGNING" : "AUTO ALIGN",
+            aligning ? "PLEASE WAIT" : "WRITES FLASH", kAmber, !running, IconId::Encoder);
+    set_key(view.keys[2], "CARRIAGE", jogging ? "STOP" : "JOG +",
+            jogging ? "MOVING" : "FWD", kCyan, !running || jogging,
+            jogging ? IconId::Stop : IconId::Next);
+    return view;
+}
+
 }  // namespace
 
 View present(const turntable::ApplicationSnapshot& snapshot, NavigationSnapshot navigation,
@@ -382,7 +419,13 @@ View present(const turntable::ApplicationSnapshot& snapshot, NavigationSnapshot 
 {
     View view;
     if (snapshot.authority == turntable::ControlAuthority::Diagnostic) {
-        view = diagnostic_view(snapshot);
+        if (!diagnostic_overlay_view(snapshot, view)) {
+            switch (navigation.diag_page) {
+            case DiagPage::TargetBrowser: view = target_browser_view(navigation.diag_target); break;
+            case DiagPage::PlatterTests:  view = platter_tests_view(snapshot); break;
+            case DiagPage::TonearmTests:  view = tonearm_tests_view(snapshot); break;
+            }
+        }
         view.keys[0].hold_progress = view.keys[0].hold_available ? transport_hold_progress : 0;
         return view;
     }
