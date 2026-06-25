@@ -60,17 +60,11 @@ void ScreenKeyDemo::reset(uint32_t now_ms)
 void ScreenKeyDemo::handle(Key key, Gesture gesture, uint32_t now_ms)
 {
     interaction_.synchronize(application_);
-    if (key == Key::Settings && gesture == Gesture::Hold) {
-        if (application_.authority == turntable::ControlAuthority::Diagnostic
-            && application_.diagnostic.state == diagnostics::State::Ready) {
-            inject_diagnostic_fault();
-            return;
-        }
-        if (application_.authority == turntable::ControlAuthority::Normal
-            && interaction_.snapshot().mode == Mode::Primary) {
-            inject_product_fault();
-            return;
-        }
+    if (key == Key::Settings && gesture == Gesture::Hold
+        && application_.authority == turntable::ControlAuthority::Normal
+        && interaction_.snapshot().mode == Mode::Primary) {
+        inject_product_fault();
+        return;
     }
     apply(interaction_.handle(key, gesture, application_), now_ms);
 }
@@ -78,6 +72,10 @@ void ScreenKeyDemo::handle(Key key, Gesture gesture, uint32_t now_ms)
 void ScreenKeyDemo::tick(uint32_t now_ms)
 {
     update_speed_trace(now_ms);
+    if (application_.authority == turntable::ControlAuthority::Diagnostic && diagnostic_ != nullptr) {
+        diagnostic_->tick();
+        sync_diagnostic();
+    }
     if (deadline_ == Deadline::None
         || static_cast<uint32_t>(now_ms - deadline_started_ms_) < deadline_duration_ms_)
         return;
@@ -101,23 +99,22 @@ void ScreenKeyDemo::apply(const Intent& intent, uint32_t now_ms)
         schedule(Deadline::FinishDiagnosticEntry, 600, now_ms);
         break;
     case IntentType::ExitDiagnostics:
+        if (diagnostic_ != nullptr) diagnostic_->request_exit();
         application_.state = turntable::ApplicationState::ExitingDiagnostic;
-        application_.diagnostic.state = diagnostics::State::Stopping;
         schedule(Deadline::FinishDiagnosticExit, 500, now_ms);
+        sync_diagnostic();
         break;
     case IntentType::SubmitDiagnostic:
-        application_.diagnostic.command = intent.diagnostic;
-        application_.diagnostic.report = {diagnostics::ExecutionState::Running};
-        application_.diagnostic.state = diagnostics::State::Running;
-        schedule(Deadline::FinishDiagnosticCommand, 1200, now_ms);
+        if (diagnostic_ != nullptr) diagnostic_->submit(intent.diagnostic);
+        sync_diagnostic();
         break;
     case IntentType::AbortDiagnostic:
-        application_.diagnostic.state = diagnostics::State::Stopping;
-        schedule(Deadline::FinishDiagnosticAbort, 500, now_ms);
+        if (diagnostic_ != nullptr) diagnostic_->abort();
+        sync_diagnostic();
         break;
     case IntentType::AcknowledgeDiagnosticFault:
-        application_.diagnostic.report = {};
-        application_.diagnostic.state = diagnostics::State::Ready;
+        if (diagnostic_ != nullptr) diagnostic_->acknowledge_fault();
+        sync_diagnostic();
         break;
     }
 }
@@ -387,15 +384,8 @@ void ScreenKeyDemo::advance(Deadline deadline, uint32_t now_ms)
         application_.authority = turntable::ControlAuthority::Diagnostic;
         application_.state = turntable::ApplicationState::Diagnostic;
         application_.diagnostic = {};
-        application_.diagnostic.state = diagnostics::State::Ready;
-        break;
-    case Deadline::FinishDiagnosticCommand:
-        application_.diagnostic.report.state = diagnostics::ExecutionState::Complete;
-        application_.diagnostic.state = diagnostics::State::Ready;
-        break;
-    case Deadline::FinishDiagnosticAbort:
-        application_.diagnostic.report = {};
-        application_.diagnostic.state = diagnostics::State::Ready;
+        if (diagnostic_ != nullptr) diagnostic_->enter();
+        sync_diagnostic();
         break;
     case Deadline::FinishDiagnosticExit:
         application_.authority = turntable::ControlAuthority::Normal;
@@ -418,12 +408,9 @@ void ScreenKeyDemo::inject_product_fault()
     interaction_.synchronize(application_);
 }
 
-void ScreenKeyDemo::inject_diagnostic_fault()
+void ScreenKeyDemo::sync_diagnostic()
 {
-    deadline_ = Deadline::None;
-    application_.diagnostic.report = {
-        diagnostics::ExecutionState::Failed, -1, 0.0f, 0.0f, false};
-    application_.diagnostic.state = diagnostics::State::Fault;
+    if (diagnostic_ != nullptr) application_.diagnostic = diagnostic_->snapshot();
 }
 
 }  // namespace hmi

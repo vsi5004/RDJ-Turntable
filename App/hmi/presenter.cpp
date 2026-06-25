@@ -361,9 +361,14 @@ View diagnostic_view(const turntable::ApplicationSnapshot& snapshot)
             !running || active == diagnostics::Action::ElectricalAlign
                 || active == diagnostics::Action::EncoderAutoCal,
             IconId::Encoder);
-    set_key(view.keys[2], "CONTROL",
-            running && active == diagnostics::Action::ClosedLoopVelocity ? "STOP" : "LOOP",
-            running ? "RUNNING" : "READY", kCyan,
+    const bool velocity_running =
+        running && active == diagnostics::Action::ClosedLoopVelocity;
+    const char* control_detail = "READY";
+    if (velocity_running)
+        control_detail = state.report.platter_calibrated ? "CLOSED LOOP" : "OPEN: RUN CAL";
+    else if (running)
+        control_detail = "RUNNING";
+    set_key(view.keys[2], "CONTROL", velocity_running ? "STOP" : "LOOP", control_detail, kCyan,
             !running || active == diagnostics::Action::ClosedLoopVelocity,
             running ? IconId::Stop : IconId::Velocity);
     return view;

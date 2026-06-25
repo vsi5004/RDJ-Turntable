@@ -29,13 +29,22 @@ constexpr float kPi = 3.14159265358979f;
 constexpr float kOpenLoopElecVel = 2.0f * kPi;
 constexpr float kBeltRatio = 90.0f / 24.0f;
 constexpr float kMotorVelocity33 = 33.3333f * kBeltRatio * (2.0f * kPi / 60.0f);
+constexpr float kMotorVelocity45 = 45.0f * kBeltRatio * (2.0f * kPi / 60.0f);
+constexpr hmi::InteractionConfig kInteractionConfig{
+    kOpenLoopElecVel, kMotorVelocity33, kMotorVelocity45};
 constexpr uint32_t kGlobalStopHoldMs = 800;
 constexpr uint32_t kCalibrationHoldMs = 2500;
 
 hmi::BacklightController backlight_controller;
 
 #if RDJ_SCREENKEY_DEMO
-hmi::ScreenKeyDemo screenkey_demo({kOpenLoopElecVel, kMotorVelocity33});
+/* Even in the display-focused demo, diagnostics drive the real platter motor (the one subsystem we
+ * can exercise on the bench), so the demo gets a genuine diagnostic stack. Normal operation stays
+ * simulated inside ScreenKeyDemo. */
+platform::HalClock clock_source;
+diagnostics::M2cExecutor m2c_executor(clock_source);
+diagnostics::Controller diagnostic_controller(m2c_executor);
+hmi::ScreenKeyDemo screenkey_demo(kInteractionConfig, &diagnostic_controller);
 #else
 platform::HalClock clock_source;
 platform::BenchPlatter platter;
@@ -45,7 +54,7 @@ turntable::Controller turntable_controller(clock_source, platter, carriage, lift
 diagnostics::M2cExecutor m2c_executor(clock_source);
 diagnostics::Controller diagnostic_controller(m2c_executor);
 turntable::ApplicationController application(turntable_controller, diagnostic_controller);
-hmi::InteractionController key_interaction({kOpenLoopElecVel, kMotorVelocity33});
+hmi::InteractionController key_interaction(kInteractionConfig);
 #endif
 
 gpio::DebouncedButton key0{gpio::InputPin{KEY0_GPIO_Port, KEY0_Pin, false}};
@@ -62,6 +71,20 @@ hmi::Gesture gesture(gpio::ButtonEvent event)
 void note_activity(gpio::ButtonEvent event, uint32_t now)
 {
     if (event != gpio::ButtonEvent::None) backlight_controller.note_activity(now);
+}
+
+void load_platter_alignment()
+{
+    nvm::Cal cal;
+    if (nvm::load(cal)) {
+        foc::zero_elec_offset = cal.zero_offset;
+        foc::direction = static_cast<int8_t>(cal.direction);
+        foc::alignment_valid = true;
+        TRACE("Loaded platter alignment: dir=%c\n", cal.direction > 0 ? '+' : '-');
+    } else {
+        TRACE("No stored platter alignment; closed-loop velocity falls back to open-loop.\n");
+        TRACE("Run KEY1 align (hold for auto-cal) in diagnostics to enable closed-loop.\n");
+    }
 }
 
 #if RDJ_SCREENKEY_DEMO
@@ -174,28 +197,24 @@ void app_init(void)
     screens::init();
     backlight_controller.reset(HAL_GetTick());
 #if RDJ_SCREENKEY_DEMO
-    /* GPIO initialization already holds PLAT_EN low. Reassert it and deliberately do not start
-     * TIM1 PWM, load motor calibration, or construct any actuator command path. */
-    foc::disable();
+    /* Normal operation is simulated, but the platter motor runs for real inside diagnostics. Bring
+     * up FOC (builds the LUT, starts TIM1 PWM + the control ISR) yet leave the driver DISABLED: in
+     * Idle mode the ISR commands nothing and PLAT_EN stays low, so the motor only spins once a
+     * diagnostic command (KEY2 loop / KEY0 spin / KEY1 align-cal) is issued. */
+    foc::init();
+    load_platter_alignment();
+    foc::stop();
     screenkey_demo.reset(HAL_GetTick());
     screens::show(hmi::present(screenkey_demo.application_snapshot(),
                                screenkey_demo.navigation_snapshot(), 0,
                                &screenkey_demo.speed_trace()));
-    TRACE("ScreenKey demo: actuator control is disabled.\n");
+    TRACE("ScreenKey demo: normal operation simulated; diagnostics drive the real platter.\n");
     TRACE("KEY0 transport/hold stop, KEY1 speed/select, KEY2 settings/next.\n");
+    TRACE("Enter diagnostics, then KEY2 spins the platter at the selected speed (33/45).\n");
     TRACE("Hold KEY2 on the primary view to inject a demo fault.\n");
 #else
     foc::init();
-
-    nvm::Cal cal;
-    if (nvm::load(cal)) {
-        foc::zero_elec_offset = cal.zero_offset;
-        foc::direction = static_cast<int8_t>(cal.direction);
-        foc::alignment_valid = true;
-        TRACE("Loaded platter alignment: dir=%c\n", cal.direction > 0 ? '+' : '-');
-    } else {
-        TRACE("No stored platter alignment; run KEY1 tap before closed-loop velocity.\n");
-    }
+    load_platter_alignment();
 
 #if RDJ_BOOT_DIAGNOSTICS
     application.boot_diagnostics();

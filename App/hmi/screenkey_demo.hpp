@@ -9,8 +9,12 @@ namespace hmi {
 
 class ScreenKeyDemo {
 public:
-    explicit ScreenKeyDemo(InteractionConfig config = {})
-        : interaction_config_(config), interaction_(config) {}
+    /* The normal-operation screens stay simulated (no mechanics on the bench), but diagnostics are
+     * delegated to a real diagnostics::Controller when one is supplied so the platter motor and its
+     * encoder calibration run for real. With no controller (host tests) diagnostics are inert. */
+    explicit ScreenKeyDemo(InteractionConfig config = {},
+                           diagnostics::Controller* diagnostic = nullptr)
+        : interaction_config_(config), interaction_(config), diagnostic_(diagnostic) {}
 
     void reset(uint32_t now_ms = 0);
     void handle(Key key, Gesture gesture, uint32_t now_ms);
@@ -39,8 +43,6 @@ private:
         FinishStop,
         FinishReturnWithoutPlatter,
         FinishDiagnosticEntry,
-        FinishDiagnosticCommand,
-        FinishDiagnosticAbort,
         FinishDiagnosticExit,
     };
 
@@ -51,11 +53,12 @@ private:
     void schedule(Deadline deadline, uint32_t duration_ms, uint32_t now_ms);
     void advance(Deadline deadline, uint32_t now_ms);
     void inject_product_fault();
-    void inject_diagnostic_fault();
+    void sync_diagnostic();
     void update_speed_trace(uint32_t now_ms);
 
     InteractionConfig interaction_config_{};
     InteractionController interaction_;
+    diagnostics::Controller* diagnostic_ = nullptr;
     turntable::ApplicationSnapshot application_{};
     Deadline deadline_ = Deadline::None;
     uint32_t deadline_started_ms_ = 0;

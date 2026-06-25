@@ -62,17 +62,22 @@ bool M2cExecutor::start(const Command& command)
         phase_ = Phase::CalRamp;
         TRACE("diag: encoder auto-cal ramp started\n");
         return true;
-    case Action::ClosedLoopVelocity:
-        if (!foc::alignment_valid) {
-            report_ = {ExecutionState::Failed, -8};
-            TRACE("diag: velocity rejected; platter alignment is not valid\n");
-            return false;
+    case Action::ClosedLoopVelocity: {
+        const float target =
+            command.parameters.value != 0.0f ? command.parameters.value : kMotorVelocity33;
+        report_.platter_calibrated = foc::alignment_valid;
+        if (foc::alignment_valid) {
+            foc::set_closed_loop_velocity(target);
+            TRACE("diag: platter velocity loop started (closed-loop)\n");
+        } else {
+            /* No stored alignment: spin open-loop at the same target so wiring can be checked.
+             * The UI shows OPEN so the operator knows to run align/auto-cal for closed-loop. */
+            foc::set_open_loop_velocity(target);
+            TRACE("diag: platter velocity open-loop fallback; run align/cal\n");
         }
-        foc::set_closed_loop_velocity(
-            command.parameters.value != 0.0f ? command.parameters.value : kMotorVelocity33);
         phase_ = Phase::Continuous;
-        TRACE("diag: platter velocity loop started\n");
         return true;
+    }
     case Action::Stop:
         safe_stop();
         report_ = {ExecutionState::Complete};
@@ -104,6 +109,7 @@ void M2cExecutor::safe_stop()
 
 ExecutionReport M2cExecutor::poll()
 {
+    report_.platter_calibrated = foc::alignment_valid;
     if (phase_ == Phase::Idle) return report_;
 
     if (foc::faulted()) {

@@ -41,7 +41,8 @@ Intent InteractionController::handle(Key key, Gesture gesture,
     synchronize(application);
     if (gesture == Gesture::None) return {};
     if (application.authority == turntable::ControlAuthority::Diagnostic)
-        return handle_diagnostic(key, gesture, application.diagnostic);
+        return handle_diagnostic(key, gesture, application.diagnostic,
+                                 application.turntable.selected_speed);
     return handle_normal(key, gesture, application);
 }
 
@@ -157,7 +158,8 @@ Intent InteractionController::handle_primary(
 }
 
 Intent InteractionController::handle_diagnostic(Key key, Gesture gesture,
-                                                const diagnostics::Snapshot& diagnostic)
+                                                const diagnostics::Snapshot& diagnostic,
+                                                turntable::RecordSpeed selected_speed)
 {
     if (key == Key::Transport && gesture == Gesture::Hold) {
         if (diagnostic.state == diagnostics::State::Ready
@@ -194,9 +196,14 @@ Intent InteractionController::handle_diagnostic(Key key, Gesture gesture,
     if (key == Key::Settings && gesture == Gesture::Tap) {
         if (diagnostic_running(diagnostic, diagnostics::Action::ClosedLoopVelocity))
             return simple_intent(IntentType::AbortDiagnostic);
-        if (diagnostic.state == diagnostics::State::Ready)
-            return diagnostic_intent(diagnostics::Action::ClosedLoopVelocity,
-                                     config_.diagnostic_closed_loop_velocity);
+        if (diagnostic.state == diagnostics::State::Ready) {
+            /* Spin the platter at the motor speed for whichever record speed was selected
+             * before entering diagnostics, scaled by the belt ratio. */
+            const float velocity = selected_speed == turntable::RecordSpeed::Rpm45
+                ? config_.diagnostic_closed_loop_velocity_45
+                : config_.diagnostic_closed_loop_velocity;
+            return diagnostic_intent(diagnostics::Action::ClosedLoopVelocity, velocity);
+        }
     }
     return {};
 }

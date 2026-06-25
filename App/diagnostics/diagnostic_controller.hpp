@@ -52,6 +52,7 @@ struct ExecutionReport {
     float primary = 0.0f;
     float secondary = 0.0f;
     bool invalidates_home = false;
+    bool platter_calibrated = false; // closed-loop drive active; false => open-loop fallback
 };
 
 class IExecutor {

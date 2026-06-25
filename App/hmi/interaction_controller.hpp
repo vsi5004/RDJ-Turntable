@@ -38,7 +38,8 @@ struct Intent {
 
 struct InteractionConfig {
     float diagnostic_open_loop_velocity = 0.0f;
-    float diagnostic_closed_loop_velocity = 0.0f;
+    float diagnostic_closed_loop_velocity = 0.0f;    // motor target for 33 1/3 RPM playback
+    float diagnostic_closed_loop_velocity_45 = 0.0f; // motor target for 45 RPM playback
 };
 
 struct NavigationSnapshot {
@@ -59,8 +60,8 @@ private:
                          const turntable::ApplicationSnapshot& application);
     Intent handle_primary(Key key, Gesture gesture,
                           const turntable::ApplicationSnapshot& application);
-    Intent handle_diagnostic(Key key, Gesture gesture,
-                             const diagnostics::Snapshot& diagnostic);
+    Intent handle_diagnostic(Key key, Gesture gesture, const diagnostics::Snapshot& diagnostic,
+                             turntable::RecordSpeed selected_speed);
     Intent global_stop(const turntable::Snapshot& state);
     void next_settings_item();
 

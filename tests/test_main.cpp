@@ -709,7 +709,9 @@ void test_screenkey_demo_walkthrough()
 
 void test_screenkey_demo_diagnostic_shortcuts()
 {
-    hmi::ScreenKeyDemo demo({1.0f, 2.0f});
+    FakeDiagnosticExecutor executor;
+    diagnostics::Controller controller(executor);
+    hmi::ScreenKeyDemo demo({1.0f, 2.0f, 3.0f}, &controller);
     demo.reset(0);
     demo.handle(hmi::Key::Settings, hmi::Gesture::Tap, 0);
     demo.handle(hmi::Key::Settings, hmi::Gesture::Tap, 0);
@@ -722,16 +724,22 @@ void test_screenkey_demo_diagnostic_shortcuts()
     CHECK(demo.application_snapshot().authority == turntable::ControlAuthority::Diagnostic);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
 
+    // Transport tap submits the open-loop spin to the real diagnostic controller.
     demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 600);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Running);
     CHECK(demo.application_snapshot().diagnostic.command.action
           == diagnostics::Action::OpenLoopSpin);
+    CHECK(executor.starts == 1);
     demo.handle(hmi::Key::Transport, hmi::Gesture::Hold, 600);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Stopping);
     demo.tick(1100);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
 
-    demo.handle(hmi::Key::Settings, hmi::Gesture::Hold, 1100);
+    // A failed execution report surfaces as a diagnostic fault, then acknowledges back to ready.
+    demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 1100);
+    CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Running);
+    executor.report = {diagnostics::ExecutionState::Failed, -1};
+    demo.tick(1100);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Fault);
     demo.handle(hmi::Key::Transport, hmi::Gesture::Tap, 1100);
     CHECK(demo.application_snapshot().diagnostic.state == diagnostics::State::Ready);
@@ -739,6 +747,36 @@ void test_screenkey_demo_diagnostic_shortcuts()
     demo.tick(1600);
     CHECK(demo.application_snapshot().authority == turntable::ControlAuthority::Normal);
     CHECK(demo.application_snapshot().turntable.state == turntable::State::NeedsHome);
+}
+
+void test_screenkey_diagnostic_speed_target()
+{
+    hmi::InteractionController interaction({1.0f, 2.0f, 3.0f});
+    turntable::ApplicationSnapshot snapshot;
+    snapshot.authority = turntable::ControlAuthority::Diagnostic;
+    snapshot.state = turntable::ApplicationState::Diagnostic;
+    snapshot.diagnostic.state = diagnostics::State::Ready;
+
+    // The closed-loop spin target follows whichever record speed was selected.
+    snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm33;
+    hmi::Intent intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::ClosedLoopVelocity);
+    CHECK(intent.diagnostic.parameters.value == 2.0f);
+
+    snapshot.turntable.selected_speed = turntable::RecordSpeed::Rpm45;
+    intent = interaction.handle(hmi::Key::Settings, hmi::Gesture::Tap, snapshot);
+    CHECK(intent.diagnostic.action == diagnostics::Action::ClosedLoopVelocity);
+    CHECK(intent.diagnostic.parameters.value == 3.0f);
+
+    // The control key reports closed-loop vs open-loop fallback while the velocity loop runs.
+    snapshot.diagnostic.state = diagnostics::State::Running;
+    snapshot.diagnostic.command.action = diagnostics::Action::ClosedLoopVelocity;
+    snapshot.diagnostic.report.platter_calibrated = true;
+    hmi::View view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[2].detail, "CLOSED LOOP");
+    snapshot.diagnostic.report.platter_calibrated = false;
+    view = hmi::present(snapshot, interaction.snapshot());
+    CHECK_TEXT(view.keys[2].detail, "OPEN: RUN CAL");
 }
 
 }  // namespace
@@ -759,6 +797,7 @@ int main()
     test_screenkey_transport_and_global_stop();
     test_screenkey_fault_details_and_status_views();
     test_screenkey_diagnostic_shortcuts();
+    test_screenkey_diagnostic_speed_target();
     test_screenkey_demo_walkthrough();
     test_screenkey_demo_diagnostic_shortcuts();
 
